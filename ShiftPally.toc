@@ -1,0 +1,12 @@
+## Interface: 20505
+## Title: ShiftPally
+## Notes: Paladin buff manager for TBC Classic parties
+## Author: Shift
+## Version: 1.0.0
+## SavedVariables: ShiftPallyDB
+
+Spells.lua
+PallyPowerComm.lua
+Core.lua
+MainBar.lua
+EditPanel.lua

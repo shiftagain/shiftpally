@@ -1,0 +1,986 @@
+PallyPower Wire Protocol Spec
+==============================
+
+Source of truth for ShiftPally's PallyPower interop. When behavior diverges from
+what PP users expect, fix this document first, then make code conform.
+
+Derived from PallyPower v2.x (TBC Classic Anniversary), code-read April 2026.
+
+
+1. ENUMS
+========
+
+BlessingID
+----------
+  0 = NONE
+  1 = WISDOM
+  2 = MIGHT
+  3 = KINGS
+  4 = SALVATION
+  5 = LIGHT
+  6 = SANCTUARY
+
+ClassID
+-------
+  1 = WARRIOR
+  2 = ROGUE
+  3 = PRIEST
+  4 = DRUID
+  5 = PALADIN
+  6 = HUNTER
+  7 = MAGE
+  8 = WARLOCK
+  9 = SHAMAN
+
+MAXCLASSES = 9 (TBC).
+
+This ordering does NOT match WoW's internal class IDs or ShiftPally's CLASS_ORDER.
+The mapping must be explicit.
+
+AuraID
+------
+  0 = NONE
+  1 = DEVOTION
+  2 = RETRIBUTION
+  3 = CONCENTRATION
+  4 = SHADOW_RESISTANCE
+  5 = FROST_RESISTANCE
+  6 = FIRE_RESISTANCE
+  7 = SANCTITY
+  8 = CRUSADER
+
+MAXAURAS = 8 (TBC).
+
+
+2. STATE
+========
+
+All endpoints read from and write to the following local state. Each client maintains
+its own copy of this state.
+
+
+State.Assignments
+-----------------
+
+Greater Blessing assignments (stored per paladin). Each paladin has an entry saying
+what Greater Blessing they are responsible for casting on each class.
+
+  Type: map<PaladinName, map<ClassID, BlessingID>>
+
+  Example:
+  {
+      "Healpally" = {
+          [1] = 3,    -- Warriors get Kings from Healpally
+          [2] = 4,    -- Rogues get Salvation from Healpally
+          [3] = 1,    -- Priests get Wisdom from Healpally
+          [4] = 0,    -- Druids: Healpally has no assignment
+          [5] = 0,
+          [6] = 0,
+          [7] = 0,
+          [8] = 0,
+          [9] = 0,
+      }
+  }
+
+Default value for any missing entry: 0 (unassigned).
+
+Persisted to disk (SavedVariables).
+
+
+State.NormalAssignments
+-----------------------
+
+Per-player blessing overrides (stored per paladin). Normally a paladin casts one
+Greater Blessing on an entire class. But sometimes a specific player needs a different
+blessing than the rest of their class. This table stores those exceptions.
+
+For example: Healpally gives all Warriors Kings, but the warrior tank "Tanky" needs
+Light instead. That override lives here.
+
+  Type: map<PaladinName, map<ClassID, map<TargetName, BlessingID>>>
+
+  Example:
+  {
+      "Healpally" = {
+          [1] = {
+              "Tanky" = 5,    -- Tanky (a Warrior) gets Light instead of Kings
+          },
+      }
+  }
+
+A value of 0 or nil means "no override, use the class Greater Blessing."
+
+NOT persisted across sessions (cleared on group join/leave).
+
+
+State.AuraAssignments
+---------------------
+
+Which aura each paladin should maintain.
+
+  Type: map<PaladinName, AuraID>
+
+  Example:
+  {
+      "Healpally" = 3,     -- Concentration Aura
+      "Retpally" = 2,      -- Retribution Aura
+  }
+
+Default: 0 (none).
+
+Persisted to disk (SavedVariables).
+
+
+State.Paladins
+--------------
+
+What each paladin is capable of casting (spell ranks, talents, etc). This is runtime
+data that gets populated when paladins report in via SELF messages. NOT persisted.
+
+  Type: map<PaladinName, PaladinInfo>
+
+  PaladinInfo = {
+      spells: map<BlessingID(1-6), SpellInfo or nil>
+      auras: map<AuraID(1-8), SpellInfo or nil>
+      freeassign: bool
+      symbols: int
+      subgroup: int (1-8)
+      cooldowns: map<SlotID(1-2), CooldownInfo or nil>
+  }
+
+  SpellInfo = {
+      rank: int       -- spell rank (1-14)
+      talent: int     -- talent points invested (0-5)
+  }
+
+  CooldownInfo = {
+      start: float    -- GetTime() timestamp when cooldown began
+      duration: int   -- total cooldown in seconds
+  }
+
+A nil entry in spells or auras means the paladin cannot cast that spell/aura.
+
+
+State.SyncList
+--------------
+
+Alphabetically sorted list of paladin names that have reported in (sent a SELF message).
+
+  Type: array<PaladinName>    -- alphabetically sorted, no duplicates
+
+
+State.Leaders
+-------------
+
+Players who are group/raid leader or assistant.
+
+  Type: set<PlayerName>
+
+Populated from the actual WoW roster (GetRaidRosterInfo rank > 0, or UnitIsGroupLeader).
+NOT populated from PPLEADER messages (those just confirm what the roster already says).
+
+In instance groups (IsInGroup(LE_PARTY_CATEGORY_INSTANCE) and IsInInstance()),
+this set is always EMPTY and all paladins operate as peers. (Instance groups don't
+exist in TBC Classic Anniversary -- see Transport section note.)
+
+
+3. TRANSPORT
+============
+
+Channel
+-------
+
+Messages are sent over WoW's hidden addon message channel. Players never see these
+in chat. The PARTY/RAID parameter just controls who receives the message, not where
+it appears.
+
+  Prefix: "PLPWR"
+  Must register at load: C_ChatInfo.RegisterAddonMessagePrefix("PLPWR")
+  Listen on event: CHAT_MSG_ADDON(event, prefix, message, distribution, source)
+  Accept only: distribution in {"PARTY", "RAID", "INSTANCE_CHAT", "WHISPER"}
+  Max message size: 255 bytes.
+
+
+Sending
+-------
+
+  Send(message)                -> broadcast to group
+  Send(message, targetName)    -> whisper to one player
+
+Distribution selection for broadcast:
+  1. IsInGroup(LE_PARTY_CATEGORY_INSTANCE) and IsInInstance() -> "INSTANCE_CHAT"
+  2. IsInRaid() -> "RAID"
+  3. else -> "PARTY"
+
+NOTE: "Instance group" means a group formed via the automatic Dungeon Finder tool.
+TBC Classic Anniversary does not have a Dungeon Finder (that was added in Wrath), so
+step 1 should never be true for us. PP includes it because the addon also supports Wrath.
+
+Deduplication: Track lastSentMessage string. If message == lastSentMessage, do NOT send.
+Update lastSentMessage on every successful send. This means if nothing changed since the
+last send, the message gets silently dropped.
+
+
+Name Normalization
+------------------
+
+All player names in the protocol may arrive with a realm suffix (e.g. "Tanky-Faerlina").
+Before using any name, normalize it:
+
+  Normalize(fullName):
+      name, realm = split(fullName, "-")
+      if realm exists AND realm != GetNormalizedRealmName():
+          return fullName       -- different realm: keep the full name
+      return name               -- same realm: strip the realm suffix
+
+
+Self-Message Filtering
+----------------------
+
+After processing PPLEADER (see endpoint), throw away any message where sender == self.
+A paladin never processes its own SELF, ASSIGN, REQ, etc. PPLEADER is the only message
+a paladin processes from itself.
+
+
+4. PERMISSIONS
+==============
+
+IsLeader(name)
+--------------
+
+  return State.Leaders contains name
+
+
+CanAssign(sender, targetPaladin)
+--------------------------------
+
+Used by: ASSIGN, PASSIGN, MASSIGN, NASSIGN, AASSIGN.
+
+A player can change a paladin's assignments if any of these are true:
+  - They're changing their own assignments (targetPaladin == sender)
+  - They're a group leader or assistant (IsLeader(sender))
+  - The receiver (me) has freeassign enabled (self.freeassign)
+
+  return targetPaladin == sender
+      OR IsLeader(sender)
+      OR self.freeassign
+
+If none of these are true, silently ignore the message.
+
+NOTE: the freeassign check is on MY local setting (the receiver), not the target
+paladin's. This means if I have freeassign on, I'll accept assignment changes from
+anyone for any paladin in my local state.
+
+
+CanClear(sender)
+----------------
+
+Used by: CLEAR. Works differently from the assignment permissions.
+
+  if IsLeader(sender):     clear ALL paladins' assignments
+  elif self.freeassign:    clear only MY OWN assignments
+  else:                    ignore the message entirely
+
+
+5. ENDPOINTS
+============
+
+Each endpoint is a message type received via CHAT_MSG_ADDON with prefix "PLPWR".
+
+
+------------------------------------------------------------------------
+REQ
+------------------------------------------------------------------------
+
+A paladin sends this to ask every other paladin in the group to report in with their
+full status (what they can cast and what they're assigned to do). Every paladin who
+receives a REQ should respond with the full SendSelf sequence (section 6).
+
+Format:
+
+  REQ
+
+No fields.
+
+State Mutations:
+
+  None.
+
+Response:
+
+  Run the SendSelf sequence (section 6). Where to send the response depends on who asked:
+
+  if we're in an instance group:
+      broadcast to group
+  elif the sender is a leader/assistant:
+      broadcast to group
+  else:
+      whisper the response back to the sender only
+
+
+------------------------------------------------------------------------
+PPLEADER
+------------------------------------------------------------------------
+
+Sent by a paladin to announce that a player is the group leader or an assistant.
+The receiver validates this against the actual WoW roster before trusting it.
+
+Format:
+
+  PPLEADER <name>
+
+  name     string    Player claiming to be leader/assistant
+
+Processing:
+
+  1. name = Normalize(name)
+  2. Check IsLeader(name) against the real WoW roster. If the claim is bogus, ignore it.
+  3. If valid and name == self, set the local PP_Leader = true flag.
+
+State Mutations:
+
+  None on the State tables. Only affects a local boolean flag.
+
+Response:
+
+  None.
+
+Special Behavior:
+
+  This is the ONLY message that gets processed when sender == self. Every other
+  message from yourself gets thrown away by the self-message filter (section 3).
+
+
+------------------------------------------------------------------------
+SELF
+------------------------------------------------------------------------
+
+A paladin's full status report: what blessings they can cast (spell ranks, talent
+points) and what Greater Blessings they're currently assigned to give each class.
+
+This is sent in response to REQ, or broadcast when joining a group, or when something
+changes (spells learned, etc).
+
+Format:
+
+  SELF <spellData>@<assignments>
+
+  spellData      string (12 hex chars)    Spell rank and talent points for each of 6 blessings
+  assignments    string (9 chars)         What blessing this paladin gives each class
+
+Parsing spellData:
+
+  12 characters, read as 6 pairs. Each pair encodes one blessing type: <rankHex><talentDigit>.
+
+  for i = 1 to 6:
+      rank_char  = spellData[(i-1)*2 + 1]
+      talent_char = spellData[(i-1)*2 + 2]
+
+      if rank_char == "n":
+          spells[i] = nil          -- this paladin can't cast this blessing
+      else:
+          spells[i] = {
+              rank = hexToInt(rank_char),     -- tonumber(c, 16)
+              talent = decToInt(talent_char),  -- tonumber(c) -- NOT hex
+          }
+
+  Index i maps to BlessingID i (1=Wisdom, 2=Might, 3=Kings, 4=Salvation, 5=Light, 6=Sanctuary).
+
+Parsing assignments:
+
+  9 characters. Character at position i is the BlessingID assigned to ClassID i.
+
+  for i = 1 to 9:
+      c = assignments[i]
+      if c == "n" or c == "":
+          value = 0
+      else:
+          value = tonumber(c)
+      State.Assignments[sender][i] = value
+
+State Mutations:
+
+  IMPORTANT: Receiving a SELF message wipes everything we knew about this paladin
+  and replaces it.
+
+  1. State.NormalAssignments[sender] = {}           -- wipe their per-player overrides
+  2. State.Assignments[sender] = {}                  -- wipe their class assignments
+  3. State.Paladins[sender] = {}                     -- wipe their capabilities
+  4. Add sender to State.SyncList (sorted, no duplicates)
+  5. State.Paladins[sender].spells = parsed spellData
+  6. State.Assignments[sender] = parsed assignments
+
+  The per-player overrides and metadata (freeassign, symbols, cooldowns) will be
+  re-populated by the NASSIGN and FREEASSIGN messages that follow immediately after.
+
+Response:
+
+  None.
+
+
+------------------------------------------------------------------------
+ASELF
+------------------------------------------------------------------------
+
+A paladin's aura status report: what auras they can cast and which one they're assigned
+to maintain. Always sent immediately after SELF by the same paladin.
+
+Format:
+
+  ASELF <auraData>@<assignment>
+
+  auraData      string (16 hex chars)    Rank and talent points for each of 8 auras
+  assignment    string (1 char)          Which AuraID this paladin is assigned, or "n" for none
+
+Parsing auraData:
+
+  16 characters = 8 pairs. Same encoding as SELF spellData.
+
+  for i = 1 to 8:
+      rank_char  = auraData[(i-1)*2 + 1]
+      talent_char = auraData[(i-1)*2 + 2]
+
+      if rank_char == "n":
+          auras[i] = nil
+      else:
+          auras[i] = {
+              rank = hexToInt(rank_char),
+              talent = decToInt(talent_char),
+          }
+
+  Index i maps to AuraID i.
+
+Precondition:
+
+  State.Paladins[sender] must already exist (created by the preceding SELF message).
+  If it doesn't exist, throw this message away.
+
+State Mutations:
+
+  1. State.AuraAssignments[sender] = 0               -- reset aura assignment
+  2. State.Paladins[sender].auras = parsed auraData
+  3. if assignment == "n" or assignment == "":
+         State.AuraAssignments[sender] = 0
+     else:
+         State.AuraAssignments[sender] = tonumber(assignment)
+
+Response:
+
+  None.
+
+
+------------------------------------------------------------------------
+ASSIGN
+------------------------------------------------------------------------
+
+Tells a paladin what Greater Blessing to cast on one class. For example, "Healpally,
+give Kings to all Warriors."
+
+Format:
+
+  ASSIGN <paladinName> <classID> <blessingID>
+
+  paladinName    string    The paladin who should cast this blessing
+  classID        int       1-9
+  blessingID     int       0-6. 0 means "clear this assignment"
+
+Auth:
+
+  CanAssign(sender, paladinName) -- throw away if unauthorized.
+
+State Mutations:
+
+  1. paladinName = Normalize(paladinName)
+  2. Create State.Assignments[paladinName] = {} if it doesn't exist yet
+  3. State.Assignments[paladinName][classID] = blessingID
+
+Response:
+
+  None.
+
+
+------------------------------------------------------------------------
+PASSIGN
+------------------------------------------------------------------------
+
+Same as ASSIGN but sets all 9 class assignments for a paladin at once instead of one
+at a time.
+
+Format:
+
+  PASSIGN <paladinName>@<assignments>
+
+  paladinName    string             The paladin who should cast these blessings
+  assignments    string (9 chars)   One BlessingID per class, or "n" for unassigned
+
+Auth:
+
+  CanAssign(sender, paladinName) -- throw away if unauthorized.
+
+State Mutations:
+
+  1. paladinName = Normalize(paladinName)
+  2. Create State.Assignments[paladinName] = {} if it doesn't exist yet
+  3. for i = 1 to 9:
+         c = assignments[i]
+         if c == "n" or c == "":
+             State.Assignments[paladinName][i] = 0
+         else:
+             State.Assignments[paladinName][i] = tonumber(c)
+
+Response:
+
+  None.
+
+
+------------------------------------------------------------------------
+MASSIGN
+------------------------------------------------------------------------
+
+Assigns the same blessing to ALL classes for one paladin. Used when a paladin is
+designated for a single blessing across the board (e.g. "you do Kings on everyone").
+
+Format:
+
+  MASSIGN <paladinName> <blessingID>
+
+  paladinName    string    The paladin who should cast this blessing
+  blessingID     int       0-6
+
+Auth:
+
+  CanAssign(sender, paladinName) -- throw away if unauthorized.
+
+State Mutations:
+
+  1. paladinName = Normalize(paladinName)
+  2. Create State.Assignments[paladinName] = {} if it doesn't exist yet
+  3. for i = 1 to 9:
+         State.Assignments[paladinName][i] = blessingID
+
+Response:
+
+  None.
+
+
+------------------------------------------------------------------------
+NASSIGN
+------------------------------------------------------------------------
+
+Overrides the blessing for specific players. Normally a paladin casts one Greater
+Blessing on a whole class. NASSIGN says "for this specific player, cast a different
+single-target blessing instead."
+
+Multiple overrides can be batched into one message, separated by @ (up to 5 per
+message due to the 255-byte limit).
+
+Format:
+
+  NASSIGN <tuple>[@<tuple>...]
+
+  Each tuple:
+  <paladinName> <classID> <targetName> <blessingID>
+
+  paladinName    string    The paladin who should cast this blessing
+  classID        int       1-9, the target player's class
+  targetName     string    The specific player getting the override
+  blessingID     int       0-6. 0 means "remove the override, go back to class default"
+
+Parsing:
+
+  Tuples are separated by @. Content starts at byte 9 (after "NASSIGN ").
+
+  for each match of pattern "([^@]*) ([^@]*) ([^@]*) ([^@]*)" in message[9..]:
+      paladinName, classID, targetName, blessingID = match groups
+
+Auth:
+
+  CanAssign(sender, paladinName) -- checked per tuple. If any tuple fails auth,
+  throw away the ENTIRE message (not just that tuple).
+
+State Mutations:
+
+  Per tuple:
+
+  1. paladinName = Normalize(paladinName)
+  2. classID = tonumber(classID)
+  3. blessingID = tonumber(blessingID)
+  4. Create State.NormalAssignments[paladinName] = {} if missing
+  5. Create State.NormalAssignments[paladinName][classID] = {} if missing
+  6. if blessingID == 0:
+         State.NormalAssignments[paladinName][classID][targetName] = nil
+     else:
+         State.NormalAssignments[paladinName][classID][targetName] = blessingID
+
+Response:
+
+  None.
+
+
+------------------------------------------------------------------------
+AASSIGN
+------------------------------------------------------------------------
+
+Tells a paladin which aura they should keep active.
+
+Format:
+
+  AASSIGN <paladinName> <auraID>
+
+  paladinName    string    The paladin who should maintain this aura
+  auraID         int       0-8. 0 means "no aura assigned"
+
+Auth:
+
+  CanAssign(sender, paladinName) -- throw away if unauthorized.
+
+State Mutations:
+
+  1. paladinName = Normalize(paladinName)
+  2. State.AuraAssignments[paladinName] = tonumber(auraID)
+
+Response:
+
+  None.
+
+
+------------------------------------------------------------------------
+CLEAR
+------------------------------------------------------------------------
+
+Wipes assignments. A leader can wipe everyone's. A non-leader can only wipe their own
+(and only if the receiver has freeassign enabled).
+
+Format:
+
+  CLEAR
+  CLEAR SKIP
+
+  SKIP    flag (optional)    When present, keep aura assignments and only clear blessings
+
+Auth:
+
+  CanClear(sender) determines the scope:
+    - Leader: clear ALL paladins.
+    - Non-leader + I have freeassign: clear only MY assignments.
+    - Non-leader + no freeassign: throw the message away.
+
+State Mutations:
+
+  For each paladin in scope:
+
+  1. Set all their class assignments to 0 (State.Assignments[paladin][1..9] = 0)
+  2. Remove all their per-player overrides (State.NormalAssignments[paladin] wiped)
+  3. If SKIP flag is NOT present:
+         Set their aura assignment to 0 (State.AuraAssignments[paladin] = 0)
+
+Response:
+
+  None.
+
+
+------------------------------------------------------------------------
+FREEASSIGN (compound message)
+------------------------------------------------------------------------
+
+Reports metadata about the sending paladin: whether they allow non-leaders to change
+their assignments, how many Greater Blessing reagents they have, and their cooldown
+timers (Lay on Hands, Divine Intervention).
+
+This is a single message string that contains multiple sub-fields. PP's parser looks for
+each sub-field as a substring match anywhere in the message.
+
+Format:
+
+  FREEASSIGN <YES|NO> | SYMCOUNT <count> | COOLDOWNS:<d1>:<r1>:<d2>:<r2>
+
+
+Sub-field: FREEASSIGN YES / NO
+
+  YES    This paladin allows anyone to change their assignments
+  NO     Only leaders can change this paladin's assignments
+
+
+Sub-field: SYMCOUNT
+
+  count    int string    How many Symbol of Kings (item 21177) this paladin has.
+                         Needed to cast Greater Blessings.
+
+
+Sub-field: COOLDOWNS
+
+  Colon-delimited. The entire COOLDOWNS portion gets split on ":".
+
+  d1    int or "n"    Slot 1 total duration in seconds
+  r1    int or "n"    Slot 1 seconds remaining
+  d2    int or "n"    Slot 2 total duration in seconds
+  r2    int or "n"    Slot 2 seconds remaining
+
+  Slot 1 = Lay on Hands. Slot 2 = Divine Intervention. "n" means no cooldown data.
+
+Precondition:
+
+  State.Paladins[sender] must exist (created by a preceding SELF message).
+  If it doesn't, throw the message away.
+
+State Mutations:
+
+  FREEASSIGN:
+      if message contains "FREEASSIGN YES":
+          State.Paladins[sender].freeassign = true
+      if message contains "FREEASSIGN NO":
+          State.Paladins[sender].freeassign = false
+
+  SYMCOUNT:
+      match "SYMCOUNT ([0-9]*)" in message
+      if count is nil or "0":
+          State.Paladins[sender].symbols = 0
+      else:
+          State.Paladins[sender].symbols = tonumber(count)
+
+  COOLDOWNS:
+      split on ":"  ->  _, d1, r1, d2, r2
+      for slot = 1, 2:
+          if remaining != "n" AND State.Paladins[sender].cooldowns[slot] does NOT already exist:
+              State.Paladins[sender].cooldowns[slot] = {
+                  start = GetTime() - (duration - remaining),
+                  duration = tonumber(duration),
+              }
+
+  Cooldown write-once quirk: PP only writes cooldown data if the slot is empty. If a
+  cooldown entry already exists for that slot, the new data is ignored. This means the
+  first FREEASSIGN message after a SELF (which wipes everything) sets the cooldowns, and
+  later FREEASSIGN messages won't update them. This is probably a bug in PP but we need
+  to match the behavior.
+
+Response:
+
+  None.
+
+
+6. SENDSELF SEQUENCE
+====================
+
+This is the full sequence a paladin sends when reporting its status. It gets triggered
+by various events (section 7). All messages are sent in the same frame with no delays
+between them.
+
+  Step 1: If I'm a leader/assistant:
+              Send("PPLEADER " .. myName)
+
+  Step 2: Build and send SELF message:
+              spellData = encode my spell ranks + talents (12 hex chars)
+              assignments = encode my class assignments (9 chars)
+              Send("SELF " .. spellData .. "@" .. assignments, [target])
+
+  Step 3: Build and send ASELF message:
+              auraData = encode my aura ranks + talents (16 hex chars)
+              auraAssign = my aura assignment ID, or "n" if none
+              Send("ASELF " .. auraData .. "@" .. auraAssign, [target])
+
+  Step 4: Send NASSIGN messages for any per-player overrides I have:
+              Collect all (myName, classID, targetName, blessingID) tuples
+              Batch into groups of 5, join with "@"
+              For each batch: Send("NASSIGN " .. batch, [target])
+              (Skip this step entirely if I have no per-player overrides)
+
+  Step 5: Send FREEASSIGN with my metadata:
+              symbols = GetItemCount(21177)
+              cooldowns = encode my cooldown durations + remaining
+              fa = "YES" if I allow free assignment, "NO" otherwise
+              Send("FREEASSIGN " .. fa .. " | SYMCOUNT " .. symbols
+                   .. " | COOLDOWNS" .. cooldownStr, [target])
+
+Where to send (the [target] parameter, applies to steps 2-5):
+
+  If SendSelf was triggered by a REQ message, target is the name of who sent the REQ.
+  If SendSelf was triggered by something else (group join, spellbook change, etc),
+  target is nil.
+
+  if target is nil (self-initiated):
+      broadcast to group
+  elif IsLeader(target):
+      broadcast to group
+  else:
+      whisper to target only
+
+
+Encoding spellData (for sending)
+--------------------------------
+
+For each BlessingID i from 1 to 6:
+  1. Check if I know the spell for blessing i.
+  2. If I don't know it: append "nn".
+  3. If I do know it:
+     - rank = spell rank from GetSpellSubtext. If no rank text (Kings, Sanctuary), use 1.
+     - talent = talent points from GetTalentInfo for the talent that improves this blessing.
+       Only blessings 1 (Wisdom), 2 (Might), 6 (Sanctuary) have improvement talents.
+       For Kings, Salvation, Light: talent is always 0.
+     - Append format("%x%x", rank, talent).
+
+
+Encoding auraData (for sending)
+-------------------------------
+
+Same as spellData but for AuraIDs 1-8.
+Talent-affected auras: 1 (Devotion), 2 (Retribution), 3 (Concentration), 7 (Sanctity).
+All others: talent is always 0.
+
+
+Encoding assignments (for sending)
+----------------------------------
+
+For each ClassID i from 1 to 9:
+  - If State.Assignments[self][i] is nil or 0: append "n".
+  - Otherwise: append the blessing ID as a single digit character.
+
+
+Encoding cooldowns (for sending)
+--------------------------------
+
+  for slot = 1, 2:
+      if I have cooldown data for this slot:
+          append ":" .. duration .. ":" .. remaining
+      else:
+          append ":n:n"
+
+  If I have no cooldown data at all, the string is ":n:n:n:n".
+
+
+7. EVENT TRIGGERS
+=================
+
+What causes a paladin to send messages, and the timing involved.
+
+
+GROUP_JOINED
+------------
+
+Fires when the player joins a group.
+
+  IMMEDIATELY:
+      State.Paladins = {}
+      State.SyncList = {}
+      State.NormalAssignments = {}
+      Rescan my spells, cooldowns, inventory
+
+  AFTER 2.0 SECOND DELAY (to let the roster stabilize):
+      Run SendSelf sequence (broadcast)
+      Send("REQ")
+
+
+GROUP_LEFT
+----------
+
+Fires when the player leaves a group.
+
+  1. State.Paladins = {}
+  2. State.SyncList = {}
+  3. State.NormalAssignments = {}
+  4. State.Assignments: keep my own entry and entries for guild members, remove everyone else
+  5. Rescan my spells, cooldowns, inventory
+
+No messages sent (there's nobody to send to).
+
+
+GROUP_ROSTER_UPDATE (paladin left detection)
+--------------------------------------------
+
+Fires when the group roster changes. PP buckets this at 1-second intervals to avoid
+spam from rapid roster updates.
+
+  1. Count how many paladins we know about in State.Paladins
+  2. Check how many of those paladins are still in the actual group roster
+  3. If someone is missing (count went down):
+         AFTER 0.5 SECOND DELAY:
+             State.Paladins = {}
+             State.SyncList = {}
+             Rescan my spells, cooldowns, inventory
+             Run SendSelf sequence (broadcast)
+             Send("REQ")
+
+This triggers a full re-sync whenever a paladin leaves.
+
+
+SPELLS_CHANGED
+--------------
+
+Fires when the player's spellbook changes (learned a new spell, etc).
+Bucketed at 1-second intervals.
+
+  1. Rescan my spells, cooldowns
+  2. Run SendSelf sequence (broadcast)
+
+
+UNIT_SPELLCAST_SUCCEEDED (cooldown tracking)
+--------------------------------------------
+
+Fires when any paladin casts a tracked cooldown spell (Lay on Hands, Divine Intervention).
+
+  AFTER 2.0 SECOND DELAY:
+      Rescan my cooldowns
+      If I'm in a group:
+          Run SendSelf sequence (broadcast)
+
+
+PLAYER_ROLES_ASSIGNED
+---------------------
+
+Fires when group roles change (someone gets promoted to leader/assistant).
+
+  AFTER 2.0 SECOND DELAY:
+      Re-evaluate the leaders list from the roster
+      If I am a leader:
+          Run SendSelf sequence (broadcast)
+
+
+Inventory Timer
+---------------
+
+ScanInventory() runs on a 60-second repeating timer. It updates the local Symbol of
+Kings reagent count but does NOT send any messages. The updated count gets included the
+next time SendSelf runs for any other reason.
+
+
+User Actions (Refresh / Open Config)
+-------------------------------------
+
+When the user clicks Refresh or opens the PP blessings config panel:
+
+  1. Rescan my spells, cooldowns, inventory
+  2. If I'm in a group:
+         Run SendSelf sequence (broadcast)
+         Send("REQ")
+
+
+8. MESSAGE PROCESSING ORDER
+============================
+
+PP checks all message types in this order within a single ParseMessage(sender, msg) call.
+Each check is an independent "if" (not "elseif"), so a single message can trigger multiple
+checks if it matches multiple patterns.
+
+   1. if msg starts with "PPLEADER":     -> process PPLEADER
+      --- STOP HERE if sender == self or addon not initialized ---
+   2. if msg == "REQ":                   -> process REQ
+   3. if msg starts with "SELF":         -> process SELF
+   4. if msg starts with "ASSIGN":       -> process ASSIGN
+   5. if msg starts with "PASSIGN":      -> process PASSIGN
+   6. if msg starts with "NASSIGN":      -> process NASSIGN
+   7. if msg starts with "MASSIGN":      -> process MASSIGN
+   8. if msg contains "SYMCOUNT":        -> process SYMCOUNT sub-field
+   9. if msg contains "COOLDOWNS":       -> process COOLDOWNS sub-field
+  10. if msg starts with "CLEAR":        -> process CLEAR
+  11. if msg contains "FREEASSIGN YES":  -> set freeassign true
+  12. if msg contains "FREEASSIGN NO":   -> set freeassign false
+  13. if msg starts with "ASELF":        -> process ASELF
+  14. if msg starts with "AASSIGN":      -> process AASSIGN
+
+The "starts with" checks use ^ anchoring, so "ASSIGN" won't accidentally match
+"PASSIGN" or "NASSIGN" (those start with different letters).
+
+The "contains" checks (SYMCOUNT, COOLDOWNS, FREEASSIGN YES/NO) are substring matches.
+This is how the compound FREEASSIGN message works: one message string triggers steps
+8, 9, and either 11 or 12 all at once.
+
+After all checks run: refresh the UI.
