@@ -115,9 +115,11 @@ function SP:ScanParty()
                 if UnitExists(petUnit) then
                     local petName = UnitName(petUnit)
                     if petName then
+                        local ownerUnit = "raid" .. i
+                        local _, ownerClass = UnitClass(ownerUnit)
                         table.insert(self.partyMembers, {
                             name = petName, unit = petUnit, class = "PET",
-                            isPet = true, ownerName = UnitName("raid" .. i),
+                            isPet = true, ownerName = UnitName(ownerUnit), ownerClass = ownerClass,
                         })
                     end
                 end
@@ -128,9 +130,11 @@ function SP:ScanParty()
                 if UnitExists(petUnit) then
                     local petName = UnitName(petUnit)
                     if petName then
+                        local ownerUnit = "party" .. i
+                        local _, ownerClass = UnitClass(ownerUnit)
                         table.insert(self.partyMembers, {
                             name = petName, unit = petUnit, class = "PET",
-                            isPet = true, ownerName = UnitName("party" .. i),
+                            isPet = true, ownerName = UnitName(ownerUnit), ownerClass = ownerClass,
                         })
                     end
                 end
@@ -139,9 +143,10 @@ function SP:ScanParty()
         if UnitExists("pet") then
             local petName = UnitName("pet")
             if petName then
+                local _, playerClass = UnitClass("player")
                 table.insert(self.partyMembers, {
                     name = petName, unit = "pet", class = "PET",
-                    isPet = true, ownerName = UnitName("player"),
+                    isPet = true, ownerName = UnitName("player"), ownerClass = playerClass,
                 })
             end
         end
@@ -334,13 +339,31 @@ function SP:GetAllMissingBuffs()
                 for _ in pairs(blessingGroups) do numKeys = numKeys + 1 end
                 local hasConflict = numKeys > 1
 
+                local hasTankOutsideSalv = false
+                if hasConflict and blessingGroups["salvation"] then
+                    for key, group in pairs(blessingGroups) do
+                        if key ~= "salvation" then
+                            for _, m in ipairs(group) do
+                                local role = UnitGroupRolesAssigned and UnitGroupRolesAssigned(m.unit)
+                                if role == "TANK" then
+                                    hasTankOutsideSalv = true
+                                    break
+                                end
+                            end
+                        end
+                        if hasTankOutsideSalv then break end
+                    end
+                end
+
                 local primaryKey, primaryCount = nil, 0
                 for _, b in ipairs(self.BLESSINGS) do
                     local group = blessingGroups[b.key]
                     if group and #group > primaryCount then
                         if not (hasConflict and playerKey and b.key == playerKey) then
-                            primaryKey = b.key
-                            primaryCount = #group
+                            if not (hasTankOutsideSalv and b.key == "salvation") then
+                                primaryKey = b.key
+                                primaryCount = #group
+                            end
                         end
                     end
                 end
@@ -479,7 +502,8 @@ function SP:GetAllMissingBuffs()
 
     if self:ShouldUseRighteousFury() and self:HasRighteousFury() then
         local rfTimeLeft = self:GetRFTimeLeft()
-        if rfTimeLeft and rfTimeLeft <= 120 then
+        local rfThreshold = self.db.earlyGreaterWarning and 900 or 120
+        if rfTimeLeft and rfTimeLeft <= rfThreshold then
             table.insert(missing, { spell = "Righteous Fury", unit = "player" })
         end
     end
@@ -674,7 +698,9 @@ function SP:SalvAll()
     local playerName = UnitName("player")
     local myRole = UnitGroupRolesAssigned and UnitGroupRolesAssigned("player")
     for _, member in ipairs(self.partyMembers) do
-        if not member.isPet then
+        if member.isPet then
+            self.db.playerBlessings[member.name] = member.ownerClass == "HUNTER" and "might" or "kings"
+        else
             local isSelf = (member.name == playerName)
             local role = UnitGroupRolesAssigned and UnitGroupRolesAssigned(member.unit)
             if isSelf then
@@ -697,7 +723,9 @@ function SP:ApplyDefaults()
     local playerName = UnitName("player")
     local myRole = UnitGroupRolesAssigned and UnitGroupRolesAssigned("player")
     for _, member in ipairs(self.partyMembers) do
-        if not member.isPet then
+        if member.isPet then
+            self.db.playerBlessings[member.name] = member.ownerClass == "HUNTER" and "might" or "kings"
+        else
             local isSelf = (member.name == playerName)
             local role = UnitGroupRolesAssigned and UnitGroupRolesAssigned(member.unit)
             if isSelf then
@@ -825,7 +853,11 @@ function SP:LoadFakeData()
     if self.db.showPets then
         table.insert(fakeMembers, {
             name = "Fluffy", unit = "partypet6", class = "PET",
-            isPet = true, ownerName = "Beastmode",
+            isPet = true, ownerName = "Beastmode", ownerClass = "HUNTER",
+        })
+        table.insert(fakeMembers, {
+            name = "Jhaambi", unit = "partypet7", class = "PET",
+            isPet = true, ownerName = "Shadowburn", ownerClass = "WARLOCK",
         })
     end
 
