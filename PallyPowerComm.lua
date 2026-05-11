@@ -632,7 +632,9 @@ function SP:HandleASSIGN(sender, msg)
         local className = CLASS_ID_TO_NAME[classID]
         local blessingKey = BLESSING_TO_KEY[blessingID]
         if className then
-            self.db.classAssignments[className] = blessingKey
+            if not blessingKey or (self.knownBlessings and self.knownBlessings[blessingKey]) then
+                self.db.classAssignments[className] = blessingKey
+            end
         end
     end
 end
@@ -664,7 +666,10 @@ function SP:HandlePASSIGN(sender, msg)
             local className = CLASS_ID_TO_NAME[i]
             local bid = self.ppState.Assignments[pName][i] or 0
             if className then
-                self.db.classAssignments[className] = BLESSING_TO_KEY[bid]
+                local blessingKey = BLESSING_TO_KEY[bid]
+                if not blessingKey or (self.knownBlessings and self.knownBlessings[blessingKey]) then
+                    self.db.classAssignments[className] = blessingKey
+                end
             end
         end
     end
@@ -722,7 +727,7 @@ function SP:HandleNASSIGN(sender, msg)
                 local blessingKey = BLESSING_TO_KEY[t.blessingID]
                 if t.blessingID == 0 then
                     self.db.playerBlessings[t.target] = nil
-                elseif blessingKey then
+                elseif blessingKey and self.knownBlessings and self.knownBlessings[blessingKey] then
                     self.db.playerBlessings[t.target] = blessingKey
                 end
             end
@@ -749,10 +754,12 @@ function SP:HandleMASSIGN(sender, msg)
     local myName = UnitName("player")
     if pName == myName then
         local blessingKey = BLESSING_TO_KEY[blessingID]
-        for i = 1, MAXCLASSES do
-            local className = CLASS_ID_TO_NAME[i]
-            if className then
-                self.db.classAssignments[className] = blessingKey
+        if not blessingKey or (self.knownBlessings and self.knownBlessings[blessingKey]) then
+            for i = 1, MAXCLASSES do
+                local className = CLASS_ID_TO_NAME[i]
+                if className then
+                    self.db.classAssignments[className] = blessingKey
+                end
             end
         end
     end
@@ -888,7 +895,10 @@ function SP:HandleAASSIGN(sender, msg)
     local myName = UnitName("player")
     if pName == myName then
         if auraID > 0 then
-            self.db.selectedAura = AURA_ID_TO_NAME[auraID]
+            local auraName = AURA_ID_TO_NAME[auraID]
+            if auraName and self.knownAuras and self.knownAuras[auraName] then
+                self.db.selectedAura = auraName
+            end
         else
             self.db.selectedAura = nil
         end

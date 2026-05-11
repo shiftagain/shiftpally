@@ -50,6 +50,7 @@ function SP:Init()
     if self.db.showPets == nil then self.db.showPets = false end
 
     self:ScanSpellbook()
+    self:CleanupStaleAssignments()
     self:InitPP()
     self:CreateMainBar()
     self:CreateCastButton()
@@ -110,17 +111,29 @@ function SP:ScanParty()
     if self.db.showPets then
         if IsInRaidGroup() then
             local numRaid = GetNumGroupMembers and GetNumGroupMembers() or (GetNumRaidMembers and GetNumRaidMembers() or 0)
+            -- Single-target blessings can only be cast on pets in the player's subgroup
+            local playerSubgroup = nil
+            for i = 1, numRaid do
+                if UnitIsUnit("raid" .. i, "player") then
+                    local _, _, subgroup = GetRaidRosterInfo(i)
+                    playerSubgroup = subgroup
+                    break
+                end
+            end
             for i = 1, numRaid do
                 local petUnit = "raidpet" .. i
                 if UnitExists(petUnit) then
-                    local petName = UnitName(petUnit)
-                    if petName then
-                        local ownerUnit = "raid" .. i
-                        local _, ownerClass = UnitClass(ownerUnit)
-                        table.insert(self.partyMembers, {
-                            name = petName, unit = petUnit, class = "PET",
-                            isPet = true, ownerName = UnitName(ownerUnit), ownerClass = ownerClass,
-                        })
+                    local _, _, ownerSubgroup = GetRaidRosterInfo(i)
+                    if ownerSubgroup == playerSubgroup then
+                        local petName = UnitName(petUnit)
+                        if petName then
+                            local ownerUnit = "raid" .. i
+                            local _, ownerClass = UnitClass(ownerUnit)
+                            table.insert(self.partyMembers, {
+                                name = petName, unit = petUnit, class = "PET",
+                                isPet = true, ownerName = UnitName(ownerUnit), ownerClass = ownerClass,
+                            })
+                        end
                     end
                 end
             end
@@ -149,6 +162,12 @@ function SP:ScanParty()
                     isPet = true, ownerName = UnitName("player"), ownerClass = playerClass,
                 })
             end
+        end
+    end
+
+    for _, member in ipairs(self.partyMembers) do
+        if member.isPet and not self.db.playerBlessings[member.name] then
+            self.db.playerBlessings[member.name] = self:GetPetDefaultBlessing(member)
         end
     end
 
@@ -519,14 +538,14 @@ function SP:GetAllMissingBuffs()
             -- cast target is self, always in cast range
         elseif UnitIsVisible and not UnitIsVisible(entry.unit) then
             isOOR = true
-        elseif IsSpellInRange and IsSpellInRange(entry.spell, entry.unit) ~= 1 then
+        elseif IsSpellInRange and IsSpellInRange(entry.spell, entry.unit) == 0 then
             isOOR = true
         end
 
         if not isOOR and entry.intendedUnit and entry.intendedUnit ~= entry.unit then
             if UnitIsVisible and not UnitIsVisible(entry.intendedUnit) then
                 isOOR = true
-            elseif IsSpellInRange and IsSpellInRange(entry.spell, entry.intendedUnit) ~= 1 then
+            elseif IsSpellInRange and IsSpellInRange(entry.spell, entry.intendedUnit) == 0 then
                 isOOR = true
             end
         end
@@ -648,7 +667,25 @@ end
 
 -- Assignment functions
 
+function SP:CleanupStaleAssignments()
+    if not self.knownBlessings then return end
+    for class, key in pairs(self.db.classAssignments) do
+        if not self.knownBlessings[key] then
+            self.db.classAssignments[class] = nil
+        end
+    end
+    for name, key in pairs(self.db.playerBlessings) do
+        if not self.knownBlessings[key] then
+            self.db.playerBlessings[name] = nil
+        end
+    end
+    if self.db.selectedAura and not (self.knownAuras and self.knownAuras[self.db.selectedAura]) then
+        self.db.selectedAura = nil
+    end
+end
+
 function SP:SetClassAssignment(class, blessingKey)
+    if blessingKey and not (self.knownBlessings and self.knownBlessings[blessingKey]) then return end
     self.db.classAssignments[class] = blessingKey
     self:PPSendSelfIfInGroup()
     self:UpdateBuffStatus()
@@ -656,6 +693,7 @@ function SP:SetClassAssignment(class, blessingKey)
 end
 
 function SP:SetPlayerBlessing(playerName, blessingKey)
+    if blessingKey and not (self.knownBlessings and self.knownBlessings[blessingKey]) then return end
     self.db.playerBlessings[playerName] = blessingKey
     self:PPSendSelfIfInGroup()
     self:UpdateBuffStatus()
@@ -663,6 +701,7 @@ function SP:SetPlayerBlessing(playerName, blessingKey)
 end
 
 function SP:SetAura(auraName)
+    if auraName and not (self.knownAuras and self.knownAuras[auraName]) then return end
     self.db.selectedAura = auraName
     self:PPSendSelfIfInGroup()
     self:UpdateBuffStatus()
@@ -694,24 +733,36 @@ function SP:ClearAll()
     if self.editPanel and self.editPanel:IsShown() then self:UpdateEditPanel() end
 end
 
+function SP:GetPetDefaultBlessing(member)
+    if member.ownerClass == "HUNTER" then
+        if self.knownBlessings and self.knownBlessings["might"] then return "might" end
+        if self.knownBlessings and self.knownBlessings["kings"] then return "kings" end
+    else
+        if self.knownBlessings and self.knownBlessings["kings"] then return "kings" end
+    end
+    return nil
+end
+
 function SP:SalvAll()
     local playerName = UnitName("player")
     local myRole = UnitGroupRolesAssigned and UnitGroupRolesAssigned("player")
     for _, member in ipairs(self.partyMembers) do
         if member.isPet then
-            self.db.playerBlessings[member.name] = member.ownerClass == "HUNTER" and "might" or "kings"
+            self.db.playerBlessings[member.name] = self:GetPetDefaultBlessing(member)
         else
             local isSelf = (member.name == playerName)
             local role = UnitGroupRolesAssigned and UnitGroupRolesAssigned(member.unit)
+            local key
             if isSelf then
-                self.db.playerBlessings[member.name] = (myRole == "TANK") and "sanctuary" or "wisdom"
+                key = (myRole == "TANK") and "sanctuary" or "wisdom"
             elseif role == "TANK" then
-                self.db.playerBlessings[member.name] = "light"
+                key = "light"
             elseif myRole == "TANK" and role == "HEALER" then
-                self.db.playerBlessings[member.name] = "wisdom"
+                key = "wisdom"
             else
-                self.db.playerBlessings[member.name] = "salvation"
+                key = "salvation"
             end
+            self.db.playerBlessings[member.name] = (self.knownBlessings and self.knownBlessings[key]) and key or nil
         end
     end
     self:PPSendSelfIfInGroup()
@@ -724,17 +775,19 @@ function SP:ApplyDefaults()
     local myRole = UnitGroupRolesAssigned and UnitGroupRolesAssigned("player")
     for _, member in ipairs(self.partyMembers) do
         if member.isPet then
-            self.db.playerBlessings[member.name] = member.ownerClass == "HUNTER" and "might" or "kings"
+            self.db.playerBlessings[member.name] = self:GetPetDefaultBlessing(member)
         else
             local isSelf = (member.name == playerName)
             local role = UnitGroupRolesAssigned and UnitGroupRolesAssigned(member.unit)
+            local key
             if isSelf then
-                self.db.playerBlessings[member.name] = (myRole == "TANK") and "sanctuary" or "wisdom"
+                key = (myRole == "TANK") and "sanctuary" or "wisdom"
             elseif role == "TANK" then
-                self.db.playerBlessings[member.name] = "light"
+                key = "light"
             else
-                self.db.playerBlessings[member.name] = self.db.classAssignments[member.class]
+                key = self.db.classAssignments[member.class]
             end
+            self.db.playerBlessings[member.name] = (self.knownBlessings and self.knownBlessings[key]) and key or nil
         end
     end
     self:PPSendSelfIfInGroup()
@@ -775,6 +828,7 @@ eventFrame:SetScript("OnEvent", function(self, event, arg1, arg2, arg3)
             C_Timer.After(1.0, function()
                 spellsBucket = nil
                 SP:ScanSpellbook()
+                SP:CleanupStaleAssignments()
                 SP:PPOnSpellsChanged()
                 SP:UpdateBuffStatus()
             end)
