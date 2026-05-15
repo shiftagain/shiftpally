@@ -283,7 +283,7 @@ local function GetPaladinColumns()
         end
     end
     local playerName = UnitName("player") or "You"
-    table.insert(cols, { name = playerName, isSelf = true, data = SP.db })
+    table.insert(cols, { name = playerName, isSelf = true, data = SP.charDB })
     return cols
 end
 
@@ -298,9 +298,9 @@ local function GetEffectiveBlessing(pData, member)
 end
 
 local function IsPlayerOverride(member)
-    local key = SP.db.playerBlessings[member.name]
+    local key = SP.charDB.playerBlessings[member.name]
     if not key then return false end
-    return key ~= SP.db.classAssignments[member.class]
+    return key ~= SP.charDB.classAssignments[member.class]
 end
 
 local function IsPaladinOverride(pData, member)
@@ -993,7 +993,7 @@ function SP:RenderMemberRow(content, member, y, cols, overridesOnly)
                     row:SetBackdropBorderColor(0.5, 0.15, 0.15, 1)
                 end
 
-                local classDefault = isOverride and SP.db.classAssignments[m.class] or nil
+                local classDefault = isOverride and SP.charDB.classAssignments[m.class] or nil
                 CreateBlessingCell(row, i, #cols, effectiveKey, true, onSelect, isOverride and not overridesOnly, col.name, not isOverride, classDefault, nil)
             end
         else
@@ -1240,7 +1240,7 @@ function SP:UpdateAuraPanel()
                     HideAuraIconPicker()
                 else
                     HideAuraIconPicker()
-                    ShowAuraIconPicker(btn, SP.db.selectedAura, function(aura)
+                    ShowAuraIconPicker(btn, SP.charDB.selectedAura, function(aura)
                         SP:SetAura(aura)
                     end)
                 end

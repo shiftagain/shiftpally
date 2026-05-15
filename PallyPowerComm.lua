@@ -249,7 +249,7 @@ function SP:EncodeAssignments()
     local result = ""
     for i = 1, MAXCLASSES do
         local className = CLASS_ID_TO_NAME[i]
-        local key = self.db.classAssignments and self.db.classAssignments[className]
+        local key = self.charDB.classAssignments and self.charDB.classAssignments[className]
         if key then
             local id = KEY_TO_BLESSING[key]
             result = result .. (id and tostring(id) or "n")
@@ -325,15 +325,15 @@ function SP:PPSendSelf(target)
 
     local auraData = self:EncodeAuraData()
     local auraAssign = "n"
-    if self.db.selectedAura then
-        local auraID = NAME_TO_AURA_ID[self.db.selectedAura]
+    if self.charDB.selectedAura then
+        local auraID = NAME_TO_AURA_ID[self.charDB.selectedAura]
         if auraID then auraAssign = tostring(auraID) end
     end
     self:PPSend("ASELF " .. auraData .. "@" .. auraAssign, sendTarget)
 
     local tuples = {}
-    if self.db.playerBlessings then
-        for playerName, blessingKey in pairs(self.db.playerBlessings) do
+    if self.charDB.playerBlessings then
+        for playerName, blessingKey in pairs(self.charDB.playerBlessings) do
             local blessingID = KEY_TO_BLESSING[blessingKey] or 0
             for _, member in ipairs(self.partyMembers) do
                 if member.name == playerName then
@@ -633,7 +633,7 @@ function SP:HandleASSIGN(sender, msg)
         local blessingKey = BLESSING_TO_KEY[blessingID]
         if className then
             if not blessingKey or (self.knownBlessings and self.knownBlessings[blessingKey]) then
-                self.db.classAssignments[className] = blessingKey
+                self.charDB.classAssignments[className] = blessingKey
             end
         end
     end
@@ -668,7 +668,7 @@ function SP:HandlePASSIGN(sender, msg)
             if className then
                 local blessingKey = BLESSING_TO_KEY[bid]
                 if not blessingKey or (self.knownBlessings and self.knownBlessings[blessingKey]) then
-                    self.db.classAssignments[className] = blessingKey
+                    self.charDB.classAssignments[className] = blessingKey
                 end
             end
         end
@@ -726,9 +726,9 @@ function SP:HandleNASSIGN(sender, msg)
             if t.paladin == myName then
                 local blessingKey = BLESSING_TO_KEY[t.blessingID]
                 if t.blessingID == 0 then
-                    self.db.playerBlessings[t.target] = nil
+                    self.charDB.playerBlessings[t.target] = nil
                 elseif blessingKey and self.knownBlessings and self.knownBlessings[blessingKey] then
-                    self.db.playerBlessings[t.target] = blessingKey
+                    self.charDB.playerBlessings[t.target] = blessingKey
                 end
             end
         end
@@ -758,7 +758,7 @@ function SP:HandleMASSIGN(sender, msg)
             for i = 1, MAXCLASSES do
                 local className = CLASS_ID_TO_NAME[i]
                 if className then
-                    self.db.classAssignments[className] = blessingKey
+                    self.charDB.classAssignments[className] = blessingKey
                 end
             end
         end
@@ -827,9 +827,9 @@ function SP:HandleCLEAR(sender, msg)
                 self.ppState.AuraAssignments[pName] = 0
             end
         end
-        self.db.classAssignments = {}
-        self.db.playerBlessings = {}
-        if not skipAuras then self.db.selectedAura = nil end
+        self.charDB.classAssignments = {}
+        self.charDB.playerBlessings = {}
+        if not skipAuras then self.charDB.selectedAura = nil end
     elseif scope == "self" then
         if self.ppState.Assignments[myName] then
             for i = 1, MAXCLASSES do
@@ -840,9 +840,9 @@ function SP:HandleCLEAR(sender, msg)
         if not skipAuras then
             self.ppState.AuraAssignments[myName] = 0
         end
-        self.db.classAssignments = {}
-        self.db.playerBlessings = {}
-        if not skipAuras then self.db.selectedAura = nil end
+        self.charDB.classAssignments = {}
+        self.charDB.playerBlessings = {}
+        if not skipAuras then self.charDB.selectedAura = nil end
     end
 end
 
@@ -897,10 +897,10 @@ function SP:HandleAASSIGN(sender, msg)
         if auraID > 0 then
             local auraName = AURA_ID_TO_NAME[auraID]
             if auraName and self.knownAuras and self.knownAuras[auraName] then
-                self.db.selectedAura = auraName
+                self.charDB.selectedAura = auraName
             end
         else
-            self.db.selectedAura = nil
+            self.charDB.selectedAura = nil
         end
     end
 end
@@ -1009,7 +1009,7 @@ function SP:PPOnGroupJoined()
     self.ppState.Assignments = {}
     self.ppState.NormalAssignments = {}
     self.ppState.AuraAssignments = {}
-    self.db.playerBlessings = {}
+    self.charDB.playerBlessings = {}
 
     self:ScanSpellbook()
     self:PPUpdateLeaders()
@@ -1030,7 +1030,7 @@ function SP:PPOnGroupLeft()
     self.ppState.AuraAssignments = {}
     self.ppState.Leaders = {}
 
-    self.db.playerBlessings = {}
+    self.charDB.playerBlessings = {}
     self:ScanSpellbook()
 end
 

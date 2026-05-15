@@ -30,9 +30,16 @@ end
 function SP:Init()
     if not ShiftPallyDB then ShiftPallyDB = {} end
     self.db = ShiftPallyDB
-    self.db.classAssignments = self.db.classAssignments or {}
-    self.db.playerBlessings = self.db.playerBlessings or {}
-    self.db.selectedAura = self.db.selectedAura
+    if not ShiftPallyCharDB then ShiftPallyCharDB = {} end
+    self.charDB = ShiftPallyCharDB
+    if not self.charDB.classAssignments and ShiftPallyDB.classAssignments then
+        self.charDB.classAssignments = ShiftPallyDB.classAssignments
+        self.charDB.playerBlessings = ShiftPallyDB.playerBlessings
+        self.charDB.selectedAura = ShiftPallyDB.selectedAura
+    end
+    self.charDB.classAssignments = self.charDB.classAssignments or {}
+    self.charDB.playerBlessings = self.charDB.playerBlessings or {}
+    self.charDB.selectedAura = self.charDB.selectedAura
     self.db.mainBarPos = self.db.mainBarPos
     if self.db.rfSolo == nil then self.db.rfSolo = true end
     if self.db.rfTank == nil then self.db.rfTank = true end
@@ -166,8 +173,8 @@ function SP:ScanParty()
     end
 
     for _, member in ipairs(self.partyMembers) do
-        if member.isPet and not self.db.playerBlessings[member.name] then
-            self.db.playerBlessings[member.name] = self:GetPetDefaultBlessing(member)
+        if member.isPet and not self.charDB.playerBlessings[member.name] then
+            self.charDB.playerBlessings[member.name] = self:GetPetDefaultBlessing(member)
         end
     end
 
@@ -190,9 +197,9 @@ function SP:InitTracking()
 end
 
 function SP:GetPlannedBlessingKey(member)
-    local key = self.db.playerBlessings[member.name]
+    local key = self.charDB.playerBlessings[member.name]
     if key then return key end
-    return self.db.classAssignments[member.class]
+    return self.charDB.classAssignments[member.class]
 end
 
 function SP:HasRighteousFury()
@@ -254,8 +261,8 @@ function SP:UpdateBuffStatus()
                 end
             end
         end
-        if not anyTrulyMissing and not self.db.ignoreAura and self.db.selectedAura then
-            if self:GetActiveAura() ~= self.db.selectedAura then
+        if not anyTrulyMissing and not self.db.ignoreAura and self.charDB.selectedAura then
+            if self:GetActiveAura() ~= self.charDB.selectedAura then
                 anyTrulyMissing = true
             end
         end
@@ -486,7 +493,7 @@ function SP:GetAllMissingBuffs()
 
         for _, member in ipairs(self.partyMembers) do
             if member.isPet then
-                local key = self.db.playerBlessings[member.name]
+                local key = self.charDB.playerBlessings[member.name]
                 if key then
                     local b = self:GetBlessingByKey(key)
                     if b then
@@ -511,8 +518,8 @@ function SP:GetAllMissingBuffs()
         end
     end
 
-    if not self.db.ignoreAura and self.db.selectedAura and self:GetActiveAura() ~= self.db.selectedAura then
-        table.insert(missing, { spell = self.db.selectedAura, unit = "player" })
+    if not self.db.ignoreAura and self.charDB.selectedAura and self:GetActiveAura() ~= self.charDB.selectedAura then
+        table.insert(missing, { spell = self.charDB.selectedAura, unit = "player" })
     end
 
     if self:ShouldUseRighteousFury() and not self:HasRighteousFury() then
@@ -669,24 +676,24 @@ end
 
 function SP:CleanupStaleAssignments()
     if not self.knownBlessings then return end
-    for class, key in pairs(self.db.classAssignments) do
+    for class, key in pairs(self.charDB.classAssignments) do
         if not self.knownBlessings[key] then
-            self.db.classAssignments[class] = nil
+            self.charDB.classAssignments[class] = nil
         end
     end
-    for name, key in pairs(self.db.playerBlessings) do
+    for name, key in pairs(self.charDB.playerBlessings) do
         if not self.knownBlessings[key] then
-            self.db.playerBlessings[name] = nil
+            self.charDB.playerBlessings[name] = nil
         end
     end
-    if self.db.selectedAura and not (self.knownAuras and self.knownAuras[self.db.selectedAura]) then
-        self.db.selectedAura = nil
+    if self.charDB.selectedAura and not (self.knownAuras and self.knownAuras[self.charDB.selectedAura]) then
+        self.charDB.selectedAura = nil
     end
 end
 
 function SP:SetClassAssignment(class, blessingKey)
     if blessingKey and not (self.knownBlessings and self.knownBlessings[blessingKey]) then return end
-    self.db.classAssignments[class] = blessingKey
+    self.charDB.classAssignments[class] = blessingKey
     self:PPSendSelfIfInGroup()
     self:UpdateBuffStatus()
     if self.editPanel and self.editPanel:IsShown() then self:UpdateEditPanel() end
@@ -694,7 +701,7 @@ end
 
 function SP:SetPlayerBlessing(playerName, blessingKey)
     if blessingKey and not (self.knownBlessings and self.knownBlessings[blessingKey]) then return end
-    self.db.playerBlessings[playerName] = blessingKey
+    self.charDB.playerBlessings[playerName] = blessingKey
     self:PPSendSelfIfInGroup()
     self:UpdateBuffStatus()
     if self.editPanel and self.editPanel:IsShown() then self:UpdateEditPanel() end
@@ -702,16 +709,16 @@ end
 
 function SP:SetAura(auraName)
     if auraName and not (self.knownAuras and self.knownAuras[auraName]) then return end
-    self.db.selectedAura = auraName
+    self.charDB.selectedAura = auraName
     self:PPSendSelfIfInGroup()
     self:UpdateBuffStatus()
     if self.editPanel and self.editPanel:IsShown() then self:UpdateEditPanel() end
 end
 
 function SP:ClearAll()
-    self.db.classAssignments = {}
-    self.db.playerBlessings = {}
-    self.db.selectedAura = nil
+    self.charDB.classAssignments = {}
+    self.charDB.playerBlessings = {}
+    self.charDB.selectedAura = nil
 
     if self:PPIsInGroup() and not self.useFakeData then
         self:PPSendClearMsg(false)
@@ -748,7 +755,7 @@ function SP:SalvAll()
     local myRole = UnitGroupRolesAssigned and UnitGroupRolesAssigned("player")
     for _, member in ipairs(self.partyMembers) do
         if member.isPet then
-            self.db.playerBlessings[member.name] = self:GetPetDefaultBlessing(member)
+            self.charDB.playerBlessings[member.name] = self:GetPetDefaultBlessing(member)
         else
             local isSelf = (member.name == playerName)
             local role = UnitGroupRolesAssigned and UnitGroupRolesAssigned(member.unit)
@@ -762,7 +769,7 @@ function SP:SalvAll()
             else
                 key = "salvation"
             end
-            self.db.playerBlessings[member.name] = (self.knownBlessings and self.knownBlessings[key]) and key or nil
+            self.charDB.playerBlessings[member.name] = (self.knownBlessings and self.knownBlessings[key]) and key or nil
         end
     end
     self:PPSendSelfIfInGroup()
@@ -775,7 +782,7 @@ function SP:ApplyDefaults()
     local myRole = UnitGroupRolesAssigned and UnitGroupRolesAssigned("player")
     for _, member in ipairs(self.partyMembers) do
         if member.isPet then
-            self.db.playerBlessings[member.name] = self:GetPetDefaultBlessing(member)
+            self.charDB.playerBlessings[member.name] = self:GetPetDefaultBlessing(member)
         else
             local isSelf = (member.name == playerName)
             local role = UnitGroupRolesAssigned and UnitGroupRolesAssigned(member.unit)
@@ -785,9 +792,9 @@ function SP:ApplyDefaults()
             elseif role == "TANK" then
                 key = "light"
             else
-                key = self.db.classAssignments[member.class]
+                key = self.charDB.classAssignments[member.class]
             end
-            self.db.playerBlessings[member.name] = (self.knownBlessings and self.knownBlessings[key]) and key or nil
+            self.charDB.playerBlessings[member.name] = (self.knownBlessings and self.knownBlessings[key]) and key or nil
         end
     end
     self:PPSendSelfIfInGroup()
@@ -921,7 +928,7 @@ function SP:LoadFakeData()
         table.insert(self.partyClasses[m.class], m)
     end
 
-    self.db.classAssignments = {
+    self.charDB.classAssignments = {
         WARRIOR = "might",
         PALADIN = "wisdom",
         PRIEST  = "salvation",
@@ -933,14 +940,14 @@ function SP:LoadFakeData()
         SHAMAN  = "wisdom",
     }
 
-    self.db.playerBlessings = {
+    self.charDB.playerBlessings = {
         ["Tankenstein"] = "light",
         ["Healsworth"]  = "wisdom",
         ["Frostbite"]   = "kings",
     }
 
     self.db.showOtherPaladins = true
-    self.db.selectedAura = "Devotion Aura"
+    self.charDB.selectedAura = "Devotion Aura"
 end
 
 -- Slash commands

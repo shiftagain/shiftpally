@@ -4,6 +4,7 @@
 ## Author: Shift
 ## Version: 1.0.0
 ## SavedVariables: ShiftPallyDB
+## SavedVariablesPerCharacter: ShiftPallyCharDB
 
 Spells.lua
 PallyPowerComm.lua
