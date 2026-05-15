@@ -687,7 +687,7 @@ end
 -- Assignment functions
 
 function SP:CleanupStaleAssignments()
-    if not self.knownBlessings then return end
+    if not self.knownBlessings or not next(self.knownBlessings) then return end
     for class, key in pairs(self.charDB.classAssignments) do
         if not self.knownBlessings[key] then
             self.charDB.classAssignments[class] = nil
