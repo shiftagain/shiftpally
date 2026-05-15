@@ -23,7 +23,13 @@ Type `/sp` to toggle the bar. Click **Edit** to open the assignment panel. Click
 
 ## Install
 
-Copy the `ShiftPally` folder into your `Interface/AddOns/` directory.
+Copy the addon files into your `Interface/AddOns/` directory in a folder named exactly `ShiftPally` (case sensitive). The final path should look like:
+
+```
+Interface/AddOns/ShiftPally/ShiftPally.toc
+```
+
+WoW will not load the addon if the folder name doesn't match the `.toc` filename exactly, including capitalization.
 
 ## Status
 

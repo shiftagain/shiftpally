@@ -261,6 +261,26 @@ end
 -- Paladin Column Helpers
 -- ═══════════════════════════════════════════
 
+local function IsGroupMemberPaladin(name)
+    if IsInRaid and IsInRaid() then
+        local numRaid = GetNumGroupMembers and GetNumGroupMembers() or 0
+        for i = 1, numRaid do
+            if UnitName("raid" .. i) == name then
+                local _, class = UnitClass("raid" .. i)
+                return class == "PALADIN"
+            end
+        end
+    else
+        for i = 1, 4 do
+            if UnitName("party" .. i) == name then
+                local _, class = UnitClass("party" .. i)
+                return class == "PALADIN"
+            end
+        end
+    end
+    return false
+end
+
 local function GetPaladinColumns()
     local cols = {}
     if SP.db.showOtherPaladins then
@@ -271,7 +291,7 @@ local function GetPaladinColumns()
         else
             local myName = UnitName("player") or "You"
             for _, name in ipairs(SP.ppState.SyncList) do
-                if name ~= myName then
+                if name ~= myName and IsGroupMemberPaladin(name) then
                     table.insert(cols, {
                         name = name,
                         isSelf = false,
