@@ -227,6 +227,16 @@ function SP:GetRFTimeLeft()
     end
 end
 
+function SP:UnitHasPhaseShift(unit)
+    local i = 1
+    while true do
+        local name = UnitBuff(unit, i)
+        if not name then return false end
+        if name == "Phase Shift" then return true end
+        i = i + 1
+    end
+end
+
 function SP:ShouldUseRighteousFury()
     if not self.knownRF then return false end
     local numParty = GetPartyCount()
@@ -254,10 +264,12 @@ function SP:UpdateBuffStatus()
         local anyTrulyMissing = false
         if not skipBlessings then
             for _, member in ipairs(self.partyMembers) do
-                local key = self:GetPlannedBlessingKey(member)
-                if key and not self:UnitHasBlessing(member.unit, key) then
-                    anyTrulyMissing = true
-                    break
+                if not (member.isPet and self:UnitHasPhaseShift(member.unit)) then
+                    local key = self:GetPlannedBlessingKey(member)
+                    if key and not self:UnitHasBlessing(member.unit, key) then
+                        anyTrulyMissing = true
+                        break
+                    end
                 end
             end
         end
@@ -492,7 +504,7 @@ function SP:GetAllMissingBuffs()
         end
 
         for _, member in ipairs(self.partyMembers) do
-            if member.isPet then
+            if member.isPet and not self:UnitHasPhaseShift(member.unit) then
                 local key = self.charDB.playerBlessings[member.name]
                 if key then
                     local b = self:GetBlessingByKey(key)
