@@ -660,6 +660,7 @@ function SP:CreateEditPanel()
         HideIconPicker()
         HideAuraIconPicker()
         if SP.auraPanel then SP.auraPanel:Hide() end
+        if SP.settingsPanel then SP.settingsPanel:Hide() end
     end)
 
     local title = panel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
@@ -721,6 +722,7 @@ function SP:CreateEditPanel()
     self.currentView = self.currentView or "class"
 
     self:CreateAuraPanel()
+    self:CreateSettingsPanel()
 end
 
 -- ═══════════════════════════════════════════
@@ -755,6 +757,7 @@ function SP:UpdateEditPanel()
     CW = ComputeContentWidth(#cols)
     local panelW = CW + PANEL_PADDING
     self.editPanel:SetWidth(panelW)
+    self:RepositionPanels()
 
     if self.editPanel.tabButtons then
         local tabW, tabGap = 80, 4
@@ -1087,90 +1090,54 @@ function SP:RenderOverridesView(content, y)
 end
 
 -- ═══════════════════════════════════════════
--- Settings Section
+-- Settings Button (replaces inline settings)
 -- ═══════════════════════════════════════════
 
 function SP:RenderSettings(content, y)
-    y = y - 6
-
+    y = y - 8
     local hdr = content:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     hdr:SetPoint("TOPLEFT", content, "TOPLEFT", LM, y)
-    hdr:SetText("|cFF888888Settings|r")
-    y = y - 20
+    hdr:SetText("|cFFFFD100Always-On Display|r")
+    y = y - 16
 
-    MakeCheckbox(content, LM, y, "Righteous Fury when not in party", SP.db.rfSolo, function(self)
-        SP.db.rfSolo = self:GetChecked() and true or false
-        SP:UpdateBuffStatus()
-    end)
-    y = y - 22
-
-    MakeCheckbox(content, LM, y, "Righteous Fury when role is Tank", SP.db.rfTank, function(self)
-        SP.db.rfTank = self:GetChecked() and true or false
-        SP:UpdateBuffStatus()
-    end)
-    y = y - 22
-
-    MakeCheckbox(content, LM, y, "Ignore Aura", SP.db.ignoreAura, function(self)
-        SP.db.ignoreAura = self:GetChecked() and true or false
-        SP:UpdateBuffStatus()
-    end)
-    y = y - 22
-
-    MakeCheckbox(content, LM, y, "Ignore Blessings", SP.db.ignoreBlessings, function(self)
-        SP.db.ignoreBlessings = self:GetChecked() and true or false
-        SP:UpdateBuffStatus()
-    end)
-    y = y - 22
-
-    MakeCheckbox(content, LM, y, "Use single-target blessings instead of greater", SP.db.useBaseBlessings, function(self)
-        SP.db.useBaseBlessings = self:GetChecked() and true or false
-        SP:UpdateBuffStatus()
-    end)
-    y = y - 22
-
-    MakeCheckbox(content, LM, y, "Early warning for greater blessings (15 min)", SP.db.earlyGreaterWarning, function(self)
-        SP.db.earlyGreaterWarning = self:GetChecked() and true or false
-        SP:UpdateBuffStatus()
-    end, "Default is 2 minutes. Greater blessings cost a reagent, so earlier warning gives time to batch refreshes.")
-    y = y - 28
-
-    MakeCheckbox(content, LM, y, "Show other paladins", SP.db.showOtherPaladins, function(self)
-        SP.db.showOtherPaladins = self:GetChecked() and true or false
+    MakeCheckbox(content, LM, y, "Individual View UI", SP.db.individualViewUI, function(self)
+        SP.db.individualViewUI = self:GetChecked() and true or false
+        if SP.db.individualViewUI then SP.db.classViewUI = false end
         SP:UpdateEditPanel()
+        SP:UpdateDisplay()
     end)
     y = y - 22
 
-    MakeCheckbox(content, LM, y, "Show pets", SP.db.showPets, function(self)
-        SP.db.showPets = self:GetChecked() and true or false
-        SP:ScanParty()
-        SP:UpdateBuffStatus()
+    MakeCheckbox(content, LM, y, "Class View UI", SP.db.classViewUI, function(self)
+        SP.db.classViewUI = self:GetChecked() and true or false
+        if SP.db.classViewUI then SP.db.individualViewUI = false end
         SP:UpdateEditPanel()
-    end, "Show hunter and warlock pets in Individual and Overrides tabs for single-target blessing assignments. Pets already receive Greater Blessings through their class mapping (hunter pets = Warrior, etc).")
-    y = y - 22
+        SP:UpdateDisplay()
+    end)
+    y = y - 34
 
-    MakeCheckbox(content, LM, y, "Allow non-leaders to assign my buffs", SP.db.allowNonLeaderAssign, function(self)
-        SP.db.allowNonLeaderAssign = self:GetChecked() and true or false
-    end, "Leaders can always assign buffs.")
-    y = y - 22
+    local btnW = 120
+    local gap = 6
+    local totalW = btnW * 2 + gap
+    local startX = LM + (CW - totalW) / 2
 
-    MakeCheckbox(content, LM, y, "Enable editing other paladins' buffs", SP.db.editOtherPaladins, function(self)
-        SP.db.editOtherPaladins = self:GetChecked() and true or false
-        SP:UpdateAuraPanel()
-    end, "Requires leader or other paladin to have freeuse set in PallyPower.")
-    y = y - 28
-
-    local clearBtn = MakeButton(content, LM, y, 120, 22)
+    local clearBtn = MakeButton(content, startX, y, btnW, 22)
     clearBtn.text:SetText("|cFFFF4444Clear All Buffs|r")
     clearBtn.text:SetJustifyH("CENTER")
     clearBtn:SetScript("OnClick", function() SP:ClearAll() end)
-    y = y - 30
 
-    local noteFS = content:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    noteFS:SetPoint("TOPLEFT", content, "TOPLEFT", LM, y)
-    noteFS:SetWidth(CW)
-    noteFS:SetJustifyH("LEFT")
-    noteFS:SetText("Buff button loads all missing buffs when you enter combat. If a buff drops mid-fight, the indicator updates but the button can't change until combat ends (WoW restriction).")
-    y = y - noteFS:GetStringHeight() - 8
+    local settingsBtn = MakeButton(content, startX + btnW + gap, y, btnW, 22)
+    settingsBtn.text:SetText("Open Settings")
+    settingsBtn.text:SetJustifyH("CENTER")
+    settingsBtn:SetScript("OnClick", function()
+        if SP.settingsPanel:IsShown() then
+            SP.settingsPanel:Hide()
+        else
+            SP:UpdateSettingsPanel()
+            SP.settingsPanel:Show()
+        end
+    end)
+    y = y - 30
 
     return y
 end
@@ -1331,4 +1298,667 @@ function SP:UpdateAuraPanel()
     end
 
     self.auraPanel:SetHeight(28 + math.abs(y) + 6)
+end
+
+-- ═══════════════════════════════════════════
+-- Panel Positioning
+-- ═══════════════════════════════════════════
+
+function SP:GetPanelSide()
+    if not self.mainBar then return "LEFT" end
+    local cx = self.mainBar:GetCenter()
+    local screenW = GetScreenWidth()
+    if cx and screenW and cx < screenW / 2 then
+        return "RIGHT"
+    end
+    return "LEFT"
+end
+
+function SP:RepositionPanels()
+    local side = self:GetPanelSide()
+
+    if self.editPanel then
+        self.editPanel:ClearAllPoints()
+        if side == "RIGHT" then
+            self.editPanel:SetPoint("TOPLEFT", self.mainBar, "TOPRIGHT", 5, 10)
+        else
+            self.editPanel:SetPoint("TOPRIGHT", self.mainBar, "TOPLEFT", -5, 10)
+        end
+    end
+
+    if self.auraPanel then
+        self.auraPanel:ClearAllPoints()
+        if side == "RIGHT" then
+            self.auraPanel:SetPoint("TOPLEFT", self.editPanel, "TOPRIGHT", 5, 0)
+        else
+            self.auraPanel:SetPoint("TOPRIGHT", self.editPanel, "TOPLEFT", -5, 0)
+        end
+    end
+
+    if self.settingsPanel then
+        self.settingsPanel:ClearAllPoints()
+        if side == "RIGHT" then
+            self.settingsPanel:SetPoint("TOPLEFT", self.auraPanel, "BOTTOMLEFT", 0, -5)
+        else
+            self.settingsPanel:SetPoint("TOPRIGHT", self.auraPanel, "BOTTOMRIGHT", 0, -5)
+        end
+    end
+end
+
+-- ═══════════════════════════════════════════
+-- Settings Panel
+-- ═══════════════════════════════════════════
+
+function SP:CreateSettingsPanel()
+    local panel = CreateFrame("Frame", "ShiftPallySettingsPanel", UIParent, "BackdropTemplate")
+    panel:SetSize(280, 400)
+    panel:SetBackdrop(BACKDROP_PANEL)
+    panel:SetBackdropColor(0.05, 0.05, 0.1, 0.95)
+    panel:SetBackdropBorderColor(0.4, 0.4, 0.5, 1)
+    panel:SetFrameStrata("HIGH")
+    panel:SetClampedToScreen(true)
+    panel:EnableMouse(true)
+    panel:Hide()
+
+    local title = panel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    title:SetPoint("TOP", 0, -10)
+    title:SetText("|cFFFFD100Settings|r")
+
+    local closeBtn = CreateFrame("Button", nil, panel)
+    closeBtn:SetSize(20, 20)
+    closeBtn:SetPoint("TOPRIGHT", -8, -6)
+    local closeText = closeBtn:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    closeText:SetPoint("CENTER")
+    closeText:SetText("X")
+    closeText:SetTextColor(0.8, 0.6, 0)
+    closeBtn:SetScript("OnClick", function() panel:Hide() end)
+    closeBtn:SetScript("OnEnter", function() closeText:SetTextColor(1, 0.2, 0.2) end)
+    closeBtn:SetScript("OnLeave", function() closeText:SetTextColor(0.8, 0.6, 0) end)
+
+    local content = CreateFrame("Frame", nil, panel)
+    content:SetPoint("TOPLEFT", 0, -28)
+    content:SetPoint("BOTTOMRIGHT")
+    panel.content = content
+
+    self.settingsPanel = panel
+end
+
+local function RenderSettingsGroupHeader(content, y, text)
+    y = y - 8
+    local hdr = content:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    hdr:SetPoint("TOPLEFT", content, "TOPLEFT", 12, y)
+    hdr:SetText("|cFFFFD100" .. text .. "|r")
+    y = y - 16
+    return y
+end
+
+function SP:UpdateSettingsPanel()
+    if not self.settingsPanel then return end
+
+    local content = self.settingsPanel.content
+    ClearContent(content)
+
+    local y = -2
+    local lm = 12
+
+    y = RenderSettingsGroupHeader(content, y, "Buff Tracking")
+
+    MakeCheckbox(content, lm, y, "Ignore Aura", SP.db.ignoreAura, function(self)
+        SP.db.ignoreAura = self:GetChecked() and true or false
+        SP:UpdateBuffStatus()
+    end)
+    y = y - 22
+
+    MakeCheckbox(content, lm, y, "Ignore Blessings", SP.db.ignoreBlessings, function(self)
+        SP.db.ignoreBlessings = self:GetChecked() and true or false
+        SP:UpdateBuffStatus()
+    end)
+    y = y - 22
+
+    MakeCheckbox(content, lm, y, "Use single-target blessings", SP.db.useBaseBlessings, function(self)
+        SP.db.useBaseBlessings = self:GetChecked() and true or false
+        SP:UpdateBuffStatus()
+    end, "Cast Blessing of X instead of Greater Blessing of X.")
+    y = y - 22
+
+    MakeCheckbox(content, lm, y, "Early warning (15 min)", SP.db.earlyGreaterWarning, function(self)
+        SP.db.earlyGreaterWarning = self:GetChecked() and true or false
+        SP:UpdateBuffStatus()
+    end, "Warn 15 minutes before greater blessings expire instead of the default 2 minutes.")
+    y = y - 22
+
+    MakeCheckbox(content, lm, y, "Show pets", SP.db.showPets, function(self)
+        SP.db.showPets = self:GetChecked() and true or false
+        SP:ScanParty()
+        SP:UpdateBuffStatus()
+        SP:UpdateEditPanel()
+    end, "Show hunter and warlock pets for single-target blessing assignments.")
+    y = y - 28
+
+    y = RenderSettingsGroupHeader(content, y, "Righteous Fury")
+
+    MakeCheckbox(content, lm, y, "RF when not in party", SP.db.rfSolo, function(self)
+        SP.db.rfSolo = self:GetChecked() and true or false
+        SP:UpdateBuffStatus()
+    end)
+    y = y - 22
+
+    MakeCheckbox(content, lm, y, "RF when role is Tank", SP.db.rfTank, function(self)
+        SP.db.rfTank = self:GetChecked() and true or false
+        SP:UpdateBuffStatus()
+    end)
+    y = y - 22
+
+    y = RenderSettingsGroupHeader(content, y, "Multi-Paladin")
+
+    MakeCheckbox(content, lm, y, "Show other paladins", SP.db.showOtherPaladins, function(self)
+        SP.db.showOtherPaladins = self:GetChecked() and true or false
+        SP:UpdateEditPanel()
+    end)
+    y = y - 22
+
+    MakeCheckbox(content, lm, y, "Allow non-leaders to assign", SP.db.allowNonLeaderAssign, function(self)
+        SP.db.allowNonLeaderAssign = self:GetChecked() and true or false
+    end, "Allow non-leader paladins to assign your buffs. Leaders can always assign.")
+    y = y - 22
+
+    MakeCheckbox(content, lm, y, "Edit other paladins' buffs", SP.db.editOtherPaladins, function(self)
+        SP.db.editOtherPaladins = self:GetChecked() and true or false
+        SP:UpdateAuraPanel()
+    end, "Requires leader or other paladin to have freeuse set in PallyPower.")
+    y = y - 28
+
+    local noteFS = content:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    noteFS:SetPoint("TOPLEFT", content, "TOPLEFT", lm, y)
+    noteFS:SetWidth(256)
+    noteFS:SetJustifyH("LEFT")
+    noteFS:SetText("Buff button loads all missing buffs when you enter combat. If a buff drops mid-fight, the indicator updates but the button can't change until combat ends (WoW restriction).")
+    y = y - noteFS:GetStringHeight() - 8
+
+    self.settingsPanel:SetHeight(28 + math.abs(y) + 6)
+end
+
+-- ═══════════════════════════════════════════
+-- Always-On Display
+-- ═══════════════════════════════════════════
+
+local DISPLAY_COLORS = {
+    good     = { 0, 0.55, 0, 0.7 },
+    expiring = { 0.75, 0.75, 0, 0.7 },
+    missing  = { 0.55, 0, 0, 0.7 },
+    none     = { 0.15, 0.15, 0.15, 0.5 },
+}
+
+function SP:CreateDisplayFrame()
+    local frame = CreateFrame("Frame", "ShiftPallyDisplayFrame", self.mainBar)
+    frame:SetPoint("TOP", self.mainBar, "BOTTOM", 0, -2)
+    frame:SetSize(156, 10)
+    frame:EnableMouse(false)
+    frame:Hide()
+
+    self.displayFrame = frame
+    self.displayRows = {}
+end
+
+function SP:GetOrCreateDisplayRow(index)
+    if self.displayRows[index] then return self.displayRows[index] end
+
+    local row = CreateFrame("Frame", nil, self.displayFrame, "BackdropTemplate")
+    row:SetBackdrop({
+        bgFile = "Interface\\ChatFrame\\ChatFrameBackground",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        tile = true, tileSize = 16, edgeSize = 6,
+        insets = { left = 1, right = 1, top = 1, bottom = 1 },
+    })
+    row:SetBackdropBorderColor(0.2, 0.2, 0.25, 0.8)
+    row:EnableMouse(true)
+
+    local castBtn = CreateFrame("Button", nil, row, "SecureActionButtonTemplate")
+    castBtn:SetAllPoints()
+    castBtn:RegisterForClicks("LeftButtonDown")
+    castBtn:SetFrameLevel(row:GetFrameLevel() + 1)
+    castBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    row.castBtn = castBtn
+
+    local classIcon = row:CreateTexture(nil, "ARTWORK")
+    classIcon:SetPoint("LEFT", row, "LEFT", 3, 0)
+    row.classIcon = classIcon
+
+    local blessingIcon = row:CreateTexture(nil, "ARTWORK")
+    blessingIcon:SetPoint("RIGHT", row, "RIGHT", -3, 0)
+    row.blessingIcon = blessingIcon
+
+    local nameText = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    nameText:SetPoint("LEFT", classIcon, "RIGHT", 3, 0)
+    nameText:SetPoint("RIGHT", blessingIcon, "LEFT", -3, 0)
+    nameText:SetJustifyH("LEFT")
+    row.nameText = nameText
+
+    self.displayRows[index] = row
+    return row
+end
+
+function SP:GetMemberBuffStatus(member)
+    local p = self.buffPlan and self.buffPlan[member.name]
+    if not p then return "none" end
+    return p.status
+end
+
+function SP:UpdateDisplay()
+    if not self.displayFrame then return end
+
+    for _, row in pairs(self.displayRows) do
+        row:Hide()
+        if not InCombatLockdown() and row.castBtn then
+            row.castBtn:SetAttribute("type", nil)
+        end
+    end
+
+    if not self.db.classViewUI and not self.db.individualViewUI then
+        self.displayFrame:Hide()
+        return
+    end
+
+    local rowCount = 0
+
+    if self.db.classViewUI then
+        rowCount = self:RenderClassDisplay()
+    elseif self.db.individualViewUI then
+        rowCount = self:RenderIndividualDisplay()
+    end
+
+    if rowCount > 0 then
+        local n = #self.partyMembers
+        local rowH = self.db.classViewUI and 26
+            or (n > 10 and math.max(18, 28 - math.floor(n / 5)) or 28)
+        self.displayFrame:SetHeight(rowCount * rowH + 4)
+        self.displayFrame:Show()
+    else
+        self.displayFrame:Hide()
+    end
+end
+
+function SP:RenderClassDisplay()
+    self.displayFrame:SetWidth(176)
+    local rowH = 26
+    local iconSz = 20
+    local rowIndex = 0
+
+    for _, class in ipairs(self.CLASS_ORDER) do
+        local members = self.partyClasses[class]
+        if members and #members > 0 then
+            rowIndex = rowIndex + 1
+            local row = self:GetOrCreateDisplayRow(rowIndex)
+            row:SetSize(176, rowH)
+            row:SetPoint("TOPLEFT", self.displayFrame, "TOPLEFT", 0, -((rowIndex - 1) * rowH + 2))
+
+            local blessingKey = self.charDB.classAssignments[class]
+            local numGood, numTotal = 0, #members
+            local hasMissing, hasExpiring = false, false
+            local hasAnyAssignment = blessingKey ~= nil
+            for _, m in ipairs(members) do
+                if not hasAnyAssignment and self:GetPlannedBlessingKey(m) then
+                    hasAnyAssignment = true
+                end
+                local s = self:GetMemberBuffStatus(m)
+                if s == "missing" then hasMissing = true
+                elseif s == "expiring" then hasExpiring = true
+                else numGood = numGood + 1 end
+            end
+
+            local status
+            if not hasAnyAssignment then status = "none"
+            elseif hasMissing then status = "missing"
+            elseif hasExpiring then status = "expiring"
+            else status = "good" end
+
+            local c = DISPLAY_COLORS[status]
+            row:SetBackdropColor(c[1], c[2], c[3], c[4])
+
+            row.classIcon:SetSize(iconSz, iconSz)
+            row.classIcon:SetTexture(CLASS_ATLAS)
+            local coords = CLASS_ICON_TCOORDS[class]
+            if coords then row.classIcon:SetTexCoord(coords[1], coords[2], coords[3], coords[4]) end
+            row.classIcon:Show()
+
+            local cc = RAID_CLASS_COLORS and RAID_CLASS_COLORS[class]
+            row.nameText:SetText(SP.CLASS_NAMES[class] or class)
+            if cc then row.nameText:SetTextColor(cc.r, cc.g, cc.b)
+            else row.nameText:SetTextColor(0.8, 0.8, 0.8) end
+            row.nameText:Show()
+
+            if blessingKey then
+                row.blessingIcon:SetSize(iconSz, iconSz)
+                row.blessingIcon:SetTexture(SP:GetBlessingIcon(blessingKey))
+                row.blessingIcon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+                row.blessingIcon:Show()
+            else
+                row.blessingIcon:Hide()
+            end
+
+            if not InCombatLockdown() then
+                local function findNeedyMember(targetStatus)
+                    for _, m in ipairs(members) do
+                        local p = SP.buffPlan and SP.buffPlan[m.name]
+                        if p and p.status == targetStatus then
+                            if m.unit == "player" then return m end
+                            if not (UnitIsVisible and not UnitIsVisible(m.unit)) then
+                                if not IsSpellInRange or not p.spell or IsSpellInRange(p.spell, m.unit) ~= 0 then
+                                    return m
+                                end
+                            end
+                        end
+                    end
+                    for _, m in ipairs(members) do
+                        local p = SP.buffPlan and SP.buffPlan[m.name]
+                        if p and p.status == targetStatus then return m end
+                    end
+                    return nil
+                end
+
+                local target = findNeedyMember("missing")
+                    or findNeedyMember("expiring")
+                if not target then
+                    for _, m in ipairs(members) do
+                        local p = SP.buffPlan and SP.buffPlan[m.name]
+                        if p and p.spell then target = m; break end
+                    end
+                end
+
+                if target then
+                    local p = SP.buffPlan and SP.buffPlan[target.name]
+                    if p and p.spell then
+                        row.castBtn:SetAttribute("type", "spell")
+                        row.castBtn:SetAttribute("spell", p.spell)
+                        row.castBtn:SetAttribute("unit", target.unit)
+                    else
+                        row.castBtn:SetAttribute("type", nil)
+                    end
+                else
+                    row.castBtn:SetAttribute("type", nil)
+                end
+            end
+
+            local bName = blessingKey and SP:GetBlessingDisplayName(blessingKey) or "None"
+            local cName = SP.CLASS_NAMES[class] or class
+            local nG, nT = numGood, numTotal
+            local tipMembers = members
+            local tipTarget = row.castBtn:GetAttribute("unit")
+            local tipTargetName = tipTarget and (UnitName(tipTarget) or tipTarget)
+            row.castBtn:SetScript("OnEnter", function(self)
+                GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+                if cc then GameTooltip:AddLine(cName, cc.r, cc.g, cc.b)
+                else GameTooltip:AddLine(cName, 1, 1, 1) end
+                GameTooltip:AddLine("Assigned: " .. bName, 0.8, 0.8, 0.8)
+                if tipTargetName then
+                    GameTooltip:AddLine("Target: " .. tipTargetName, 0.5, 0.5, 0.5)
+                end
+                local minTime = nil
+                for _, m in ipairs(tipMembers) do
+                    local mKey = SP:GetPlannedBlessingKey(m)
+                    if mKey then
+                        local t = SP:GetBlessingTimeLeft(m.unit, mKey)
+                        if t and (not minTime or t < minTime) then minTime = t end
+                    end
+                end
+                if minTime then
+                    local mins = math.floor(minTime / 60)
+                    local secs = math.floor(minTime % 60)
+                    GameTooltip:AddDoubleLine(nG .. "/" .. nT .. " buffed", string.format("%d:%02d remaining", mins, secs), 0.6, 0.6, 0.6, 0.6, 0.6, 0.6)
+                else
+                    GameTooltip:AddLine(nG .. "/" .. nT .. " buffed", 0.6, 0.6, 0.6)
+                end
+                local oorCount = 0
+                for _, m in ipairs(tipMembers) do
+                    if m.unit ~= "player" then
+                        local isOOR = UnitIsVisible and not UnitIsVisible(m.unit)
+                        if not isOOR and IsSpellInRange then
+                            local mp = SP.buffPlan and SP.buffPlan[m.name]
+                            if mp and mp.spell then
+                                if IsSpellInRange(mp.spell, m.unit) == 0 then
+                                    isOOR = true
+                                end
+                            end
+                        end
+                        if isOOR then oorCount = oorCount + 1 end
+                    end
+                end
+                if oorCount > 0 then
+                    GameTooltip:AddLine(oorCount .. " out of range", 0.9, 0.2, 0.2)
+                end
+                if InCombatLockdown() then
+                    for _, m in ipairs(tipMembers) do
+                        local s = SP:GetMemberBuffStatus(m)
+                        if s == "missing" or s == "expiring" then
+                            GameTooltip:AddLine("Updates after combat", 0.5, 0.5, 0.5)
+                            break
+                        end
+                    end
+                end
+                GameTooltip:Show()
+            end)
+
+            row:Show()
+        end
+    end
+
+    return rowIndex
+end
+
+function SP:RenderIndividualDisplay()
+    local numMembers = #self.partyMembers
+    local compact = numMembers > 10
+    local rowH, iconSz, numCols, colW
+    if compact then
+        rowH = math.max(18, 28 - math.floor(numMembers / 5))
+        iconSz = rowH >= 24 and 18 or rowH >= 20 and 16 or 14
+        numCols = 3
+        colW = 80
+    else
+        rowH = 28
+        iconSz = 22
+        numCols = 1
+        colW = 176
+    end
+
+    self.displayFrame:SetWidth(numCols * colW)
+
+    local cellIndex = 0
+
+    for i, member in ipairs(self.partyMembers) do
+        cellIndex = cellIndex + 1
+        local row = self:GetOrCreateDisplayRow(cellIndex)
+
+        local col = (i - 1) % numCols
+        local visualRow = math.floor((i - 1) / numCols)
+        row:SetSize(colW, rowH)
+        row:SetPoint("TOPLEFT", self.displayFrame, "TOPLEFT", col * colW, -(visualRow * rowH + 2))
+
+        local key = self:GetPlannedBlessingKey(member)
+        local blessingStatus = self:GetMemberBuffStatus(member)
+        local isPlayer = (member.unit == "player")
+
+        local rfNeeded, rfStatus, auraNeeded, auraName
+        if isPlayer then
+            if SP:ShouldUseRighteousFury() then
+                rfNeeded = true
+                if not SP:HasRighteousFury() then
+                    rfStatus = "missing"
+                else
+                    local rfTime = SP:GetRFTimeLeft()
+                    local threshold = SP.db.earlyGreaterWarning and 900 or 120
+                    rfStatus = (rfTime and rfTime <= threshold) and "expiring" or "good"
+                end
+            end
+            if not SP.db.ignoreAura and SP.charDB.selectedAura then
+                auraNeeded = true
+                auraName = SP.charDB.selectedAura
+            end
+        end
+
+        local status = blessingStatus
+        if isPlayer then
+            if blessingStatus == "missing" or (rfNeeded and rfStatus == "missing")
+                or (auraNeeded and SP:GetActiveAura() ~= auraName) then
+                status = "missing"
+            elseif blessingStatus == "expiring" or (rfNeeded and rfStatus == "expiring") then
+                status = "expiring"
+            end
+        end
+
+        local c = DISPLAY_COLORS[status]
+        row:SetBackdropColor(c[1], c[2], c[3], c[4])
+
+        row.classIcon:SetSize(iconSz, iconSz)
+        if member.isPet then
+            row.classIcon:SetTexture("Interface\\Icons\\Ability_Hunter_BeastTraining")
+            row.classIcon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+        else
+            row.classIcon:SetTexture(CLASS_ATLAS)
+            local coords = CLASS_ICON_TCOORDS[member.class]
+            if coords then row.classIcon:SetTexCoord(coords[1], coords[2], coords[3], coords[4]) end
+        end
+        row.classIcon:Show()
+
+        local displayName = compact and member.name:sub(1, 5) or member.name
+        local cc = RAID_CLASS_COLORS and RAID_CLASS_COLORS[member.class]
+        row.nameText:SetText(displayName)
+        if cc then row.nameText:SetTextColor(cc.r, cc.g, cc.b)
+        else row.nameText:SetTextColor(0.8, 0.8, 0.8) end
+        row.nameText:Show()
+
+        local p = SP.buffPlan and SP.buffPlan[member.name]
+
+        if key then
+            local icon = (p and p.isGreater) and SP:GetGreaterBlessingIcon(key) or SP:GetBlessingIcon(key)
+            row.blessingIcon:SetSize(iconSz, iconSz)
+            row.blessingIcon:SetTexture(icon)
+            row.blessingIcon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+            row.blessingIcon:Show()
+        else
+            row.blessingIcon:Hide()
+        end
+
+        if not InCombatLockdown() then
+            local castSpell, castUnit = nil, nil
+            local memberSpell = p and p.spell
+            if isPlayer then
+                if key and blessingStatus == "missing" then
+                    castSpell = memberSpell
+                    castUnit = "player"
+                elseif rfNeeded and rfStatus == "missing" then
+                    castSpell = "Righteous Fury"
+                    castUnit = "player"
+                elseif auraNeeded and SP:GetActiveAura() ~= auraName then
+                    castSpell = auraName
+                    castUnit = "player"
+                elseif key and blessingStatus == "expiring" then
+                    castSpell = memberSpell
+                    castUnit = "player"
+                elseif rfNeeded and rfStatus == "expiring" then
+                    castSpell = "Righteous Fury"
+                    castUnit = "player"
+                elseif key then
+                    castSpell = memberSpell
+                    castUnit = "player"
+                end
+            elseif key then
+                castSpell = memberSpell
+                castUnit = member.unit
+            end
+            if castSpell then
+                row.castBtn:SetAttribute("type", "spell")
+                row.castBtn:SetAttribute("spell", castSpell)
+                row.castBtn:SetAttribute("unit", castUnit)
+            else
+                row.castBtn:SetAttribute("type", nil)
+            end
+        end
+
+        local bName = key and SP:GetBlessingDisplayName(key) or "None"
+        local mName = member.isPet and member.ownerName
+            and (member.name .. " (" .. member.ownerName .. ")") or member.name
+        local bSText = blessingStatus == "good" and "Active"
+            or blessingStatus == "expiring" and "Expiring"
+            or blessingStatus == "missing" and "Missing"
+            or "No assignment"
+        local tipUnit, tipKey = member.unit, key
+        local tipRF, tipAura, tipAuraName = rfNeeded, auraNeeded, auraName
+        row.castBtn:SetScript("OnEnter", function(self)
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            if cc then GameTooltip:AddLine(mName, cc.r, cc.g, cc.b)
+            else GameTooltip:AddLine(mName, 1, 1, 1) end
+            GameTooltip:AddLine(bName, 0.8, 0.8, 0.8)
+            local timeLeft = tipKey and SP:GetBlessingTimeLeft(tipUnit, tipKey)
+            if timeLeft then
+                local mins = math.floor(timeLeft / 60)
+                local secs = math.floor(timeLeft % 60)
+                GameTooltip:AddDoubleLine(bSText, string.format("%d:%02d remaining", mins, secs), 0.6, 0.6, 0.6, 0.6, 0.6, 0.6)
+            else
+                GameTooltip:AddLine(bSText, 0.6, 0.6, 0.6)
+            end
+            if tipUnit ~= "player" then
+                if UnitIsVisible and not UnitIsVisible(tipUnit) then
+                    GameTooltip:AddLine("Out of range", 0.9, 0.2, 0.2)
+                elseif tipKey and IsSpellInRange then
+                    local b = SP:GetBlessingByKey(tipKey)
+                    local spell = b and (b.greater or b.name)
+                    if spell and IsSpellInRange(spell, tipUnit) == 0 then
+                        GameTooltip:AddLine("Out of range", 0.9, 0.2, 0.2)
+                    end
+                end
+            end
+            if tipRF then
+                local rfTime = SP:GetRFTimeLeft()
+                if rfTime then
+                    local mins = math.floor(rfTime / 60)
+                    local secs = math.floor(rfTime % 60)
+                    GameTooltip:AddDoubleLine("RF: Active", string.format("%d:%02d remaining", mins, secs), 0.6, 0.6, 0.6, 0.6, 0.6, 0.6)
+                elseif SP:HasRighteousFury() then
+                    GameTooltip:AddLine("RF: Active", 0.6, 0.6, 0.6)
+                else
+                    GameTooltip:AddLine("RF: Missing", 0.9, 0.2, 0.2)
+                end
+            end
+            if tipAura then
+                local active = SP:GetActiveAura()
+                if active == tipAuraName then
+                    GameTooltip:AddLine("Aura: " .. tipAuraName, 0.6, 0.6, 0.6)
+                elseif active then
+                    GameTooltip:AddLine("Aura: " .. active .. " (need " .. tipAuraName .. ")", 0.9, 0.2, 0.2)
+                else
+                    GameTooltip:AddLine("Aura: Missing (" .. tipAuraName .. ")", 0.9, 0.2, 0.2)
+                end
+            end
+            if InCombatLockdown() then
+                local stale = false
+                if tipKey then
+                    local tipP = SP.buffPlan and SP.buffPlan[UnitName(tipUnit) or ""]
+                    if tipP and (tipP.status == "missing" or tipP.status == "expiring") then
+                        stale = true
+                    end
+                end
+                if not stale and tipRF then
+                    if not SP:HasRighteousFury() then
+                        stale = true
+                    else
+                        local t = SP:GetRFTimeLeft()
+                        local threshold = SP.db.earlyGreaterWarning and 900 or 120
+                        if t and t <= threshold then stale = true end
+                    end
+                end
+                if not stale and tipAura and SP:GetActiveAura() ~= tipAuraName then
+                    stale = true
+                end
+                if stale then
+                    GameTooltip:AddLine("Updates after combat", 0.5, 0.5, 0.5)
+                end
+            end
+            GameTooltip:Show()
+        end)
+
+        row:Show()
+    end
+
+    return math.ceil(numMembers / numCols)
 end

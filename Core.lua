@@ -54,14 +54,16 @@ function SP:Init()
     if self.db.allowNonLeaderAssign == nil then self.db.allowNonLeaderAssign = true end
     if self.db.editOtherPaladins == nil then self.db.editOtherPaladins = true end
     if self.db.earlyGreaterWarning == nil then self.db.earlyGreaterWarning = false end
-    if self.db.showPets == nil then self.db.showPets = false end
+    if self.db.showPets == nil then self.db.showPets = true end
+    if self.db.individualViewUI == nil then self.db.individualViewUI = false end
+    if self.db.classViewUI == nil then self.db.classViewUI = false end
 
     self:ScanSpellbook()
-    self:CleanupStaleAssignments()
     self:InitPP()
     self:CreateMainBar()
     self:CreateCastButton()
     self:CreateEditPanel()
+    self:CreateDisplayFrame()
     self:ScanParty()
     if self.useFakeData then self:LoadFakeData() end
     self:UpdateBuffStatus()
@@ -256,20 +258,18 @@ function SP:UpdateBuffStatus()
     self.allBuffsActive = true
     self.buffsExpiringSoon = false
 
-    local skipBlessings = self.db.ignoreBlessings
+    self:ComputeBuffPlan()
 
+    local skipBlessings = self.db.ignoreBlessings
     local allMissing = self:GetAllMissingBuffs()
 
     if #allMissing > 0 then
         local anyTrulyMissing = false
         if not skipBlessings then
-            for _, member in ipairs(self.partyMembers) do
-                if not (member.isPet and self:UnitHasPhaseShift(member.unit)) then
-                    local key = self:GetPlannedBlessingKey(member)
-                    if key and not self:UnitHasBlessing(member.unit, key) then
-                        anyTrulyMissing = true
-                        break
-                    end
+            for _, p in pairs(self.buffPlan) do
+                if p.status == "missing" then
+                    anyTrulyMissing = true
+                    break
                 end
             end
         end
@@ -291,10 +291,32 @@ function SP:UpdateBuffStatus()
 
     self:UpdateIndicator()
     self:UpdateCastButton(allMissing)
+    self:UpdateDisplay()
     if self.outOfRangeCount and self.outOfRangeCount > 0 then
         self:StartRangeChecker()
     else
         self:StopRangeChecker()
+    end
+
+    self.expiryTimerGen = (self.expiryTimerGen or 0) + 1
+    local expiryDelay = self.nextExpiryTime
+    if self:ShouldUseRighteousFury() and self:HasRighteousFury() then
+        local rfTime = self:GetRFTimeLeft()
+        if rfTime then
+            local rfThreshold = self.db.earlyGreaterWarning and 900 or 120
+            local rfDelta = rfTime - rfThreshold
+            if rfDelta > 0 and (not expiryDelay or rfDelta < expiryDelay) then
+                expiryDelay = rfDelta
+            end
+        end
+    end
+    if expiryDelay then
+        local gen = self.expiryTimerGen
+        C_Timer.After(expiryDelay + 0.5, function()
+            if gen == SP.expiryTimerGen then
+                SP:UpdateBuffStatus()
+            end
+        end)
     end
 end
 
@@ -329,41 +351,29 @@ function SP:GetBlessingSpellName(key)
     return b.name
 end
 
-function SP:GetAllMissingBuffs()
-    local missing = {}
+function SP:ComputeBuffPlan()
+    local plan = {}
     local numParty = GetPartyCount()
-    local skipBlessings = self.db.ignoreBlessings
 
-    if not skipBlessings then
-        local greaterQueue = {}
-        local baseQueue = {}
+    local classPrimaryKey = {}
 
-        local function needsRefresh(unit, key, requireGreater)
-            if requireGreater then
-                if not self:UnitHasGreaterBlessing(unit, key) then return true end
-                local timeLeft = self:GetGreaterBlessingTimeLeft(unit, key)
-                local threshold = self.db.earlyGreaterWarning and 900 or 120
-                return timeLeft and timeLeft <= threshold
-            end
-            if not self:UnitHasBlessing(unit, key) then return true end
-            local timeLeft = self:GetBlessingTimeLeft(unit, key)
-            return timeLeft and timeLeft <= 120
-        end
-
-        local checkedClasses = {}
-        for _, class in ipairs(self.CLASS_ORDER) do
-            local members = self.partyClasses[class]
-            if members and not checkedClasses[class] then
-                checkedClasses[class] = true
-
-                local blessingGroups = {}
-                for _, m in ipairs(members) do
-                    local key = self:GetPlannedBlessingKey(m)
-                    if key then
-                        blessingGroups[key] = blessingGroups[key] or {}
-                        table.insert(blessingGroups[key], m)
-                    end
+    for _, class in ipairs(self.CLASS_ORDER) do
+        local members = self.partyClasses[class]
+        if members then
+            local blessingGroups = {}
+            for _, m in ipairs(members) do
+                local key = self:GetPlannedBlessingKey(m)
+                if key then
+                    blessingGroups[key] = blessingGroups[key] or {}
+                    table.insert(blessingGroups[key], m)
                 end
+            end
+
+            local numKeys = 0
+            for _ in pairs(blessingGroups) do numKeys = numKeys + 1 end
+
+            if not self.db.useBaseBlessings and numParty > 0 and numKeys > 0 then
+                local hasConflict = numKeys > 1
 
                 local playerKey = nil
                 for key, group in pairs(blessingGroups) do
@@ -372,10 +382,6 @@ function SP:GetAllMissingBuffs()
                     end
                     if playerKey then break end
                 end
-
-                local numKeys = 0
-                for _ in pairs(blessingGroups) do numKeys = numKeys + 1 end
-                local hasConflict = numKeys > 1
 
                 local hasTankOutsideSalv = false
                 if hasConflict and blessingGroups["salvation"] then
@@ -415,110 +421,128 @@ function SP:GetAllMissingBuffs()
                     end
                 end
 
-                if primaryKey then
-                    local canUseGreater = not self.db.useBaseBlessings
-                        and self.knownGreater and self.knownGreater[primaryKey]
-                        and numParty > 0
+                if primaryKey and self.knownGreater and self.knownGreater[primaryKey] then
+                    classPrimaryKey[class] = primaryKey
+                end
+            end
+        end
+    end
 
-                    if canUseGreater then
-                        local primaryNeedsRefresh = false
-                        local intendedRecipient = nil
-                        for _, m in ipairs(blessingGroups[primaryKey]) do
-                            if needsRefresh(m.unit, primaryKey, true) then
-                                primaryNeedsRefresh = true
-                                if m.unit == "player" or (UnitIsVisible and UnitIsVisible(m.unit)) then
-                                    intendedRecipient = m
-                                    break
-                                elseif not intendedRecipient then
-                                    intendedRecipient = m
-                                end
-                            end
-                        end
+    for _, member in ipairs(self.partyMembers) do
+        local key = self:GetPlannedBlessingKey(member)
+        if not key then
+            plan[member.name] = { status = "none", unit = member.unit }
+        else
+            local b = self:GetBlessingByKey(key)
+            if not b then
+                plan[member.name] = { status = "none", unit = member.unit }
+            else
+                local isGreater = not member.isPet and key == classPrimaryKey[member.class]
+                local spell = isGreater and b.greater or b.name
 
-                        if primaryNeedsRefresh then
-                            local b = self:GetBlessingByKey(primaryKey)
-                            local greaterTarget = nil
-                            for _, m in ipairs(blessingGroups[primaryKey]) do
-                                if m.unit == "player" then
-                                    greaterTarget = m
-                                    break
-                                end
-                            end
-                            if not greaterTarget then
-                                for _, m in ipairs(blessingGroups[primaryKey]) do
-                                    if not IsSpellInRange or IsSpellInRange(b.greater, m.unit) ~= 0 then
-                                        greaterTarget = m
-                                        break
-                                    end
-                                end
-                            end
-                            if not greaterTarget then
-                                greaterTarget = blessingGroups[primaryKey][1]
-                            end
-                            table.insert(greaterQueue, {
-                                spell = b.greater,
-                                unit = greaterTarget.unit,
-                                intendedUnit = intendedRecipient.unit,
-                                intendedName = intendedRecipient.name,
-                            })
-                            for key, group in pairs(blessingGroups) do
-                                if key ~= primaryKey then
-                                    for _, m in ipairs(group) do
-                                        if needsRefresh(m.unit, key) then
-                                            local b2 = self:GetBlessingByKey(key)
-                                            if b2 then
-                                                table.insert(baseQueue, { spell = b2.name, unit = m.unit })
-                                            end
-                                        end
-                                    end
-                                end
-                            end
-                        else
-                            for key, group in pairs(blessingGroups) do
-                                if key ~= primaryKey then
-                                    for _, m in ipairs(group) do
-                                        if needsRefresh(m.unit, key) then
-                                            local b = self:GetBlessingByKey(key)
-                                            if b then
-                                                table.insert(baseQueue, { spell = b.name, unit = m.unit })
-                                            end
-                                        end
-                                    end
-                                end
-                            end
-                        end
+                local status = "good"
+                if member.isPet and self:UnitHasPhaseShift(member.unit) then
+                    -- phase-shifted pets always count as good
+                elseif isGreater then
+                    if not self:UnitHasGreaterBlessing(member.unit, key) then
+                        status = "missing"
                     else
-                        for key, group in pairs(blessingGroups) do
-                            for _, m in ipairs(group) do
-                                if needsRefresh(m.unit, key) then
-                                    local b = self:GetBlessingByKey(key)
-                                    if b then
-                                        table.insert(baseQueue, { spell = b.name, unit = m.unit })
-                                    end
-                                end
+                        local timeLeft = self:GetGreaterBlessingTimeLeft(member.unit, key)
+                        local threshold = self.db.earlyGreaterWarning and 900 or 120
+                        if timeLeft and timeLeft <= threshold then
+                            status = "expiring"
+                        end
+                    end
+                else
+                    if not self:UnitHasBlessing(member.unit, key) then
+                        status = "missing"
+                    else
+                        local timeLeft = self:GetBlessingTimeLeft(member.unit, key)
+                        if timeLeft and timeLeft <= 120 then
+                            status = "expiring"
+                        end
+                    end
+                end
+
+                plan[member.name] = {
+                    key = key,
+                    spell = spell,
+                    unit = member.unit,
+                    isGreater = isGreater,
+                    status = status,
+                }
+            end
+        end
+    end
+
+    local nextExpiry = nil
+    for _, member in ipairs(self.partyMembers) do
+        local p = plan[member.name]
+        if p and p.status == "good" and p.key then
+            local timeLeft
+            if p.isGreater then
+                timeLeft = self:GetGreaterBlessingTimeLeft(member.unit, p.key)
+            else
+                timeLeft = self:GetBlessingTimeLeft(member.unit, p.key)
+            end
+            if timeLeft then
+                local threshold = (p.isGreater and self.db.earlyGreaterWarning) and 900 or 120
+                local delta = timeLeft - threshold
+                if delta > 0 and (not nextExpiry or delta < nextExpiry) then
+                    nextExpiry = delta
+                end
+            end
+        end
+    end
+    self.nextExpiryTime = nextExpiry
+
+    self.buffPlan = plan
+end
+
+function SP:GetAllMissingBuffs()
+    local missing = {}
+    local plan = self.buffPlan or {}
+    local skipBlessings = self.db.ignoreBlessings
+
+    if not skipBlessings then
+        local greaterQueue = {}
+        local baseQueue = {}
+
+        local greaterClassDone = {}
+        for _, class in ipairs(self.CLASS_ORDER) do
+            local members = self.partyClasses[class]
+            if members and not greaterClassDone[class] then
+                greaterClassDone[class] = true
+                local needsRefresh = {}
+                for _, m in ipairs(members) do
+                    local p = plan[m.name]
+                    if p and p.isGreater and (p.status == "missing" or p.status == "expiring") then
+                        table.insert(needsRefresh, m)
+                    end
+                end
+                if #needsRefresh > 0 then
+                    local spell = plan[needsRefresh[1].name].spell
+                    local target = nil
+                    for _, m in ipairs(needsRefresh) do
+                        if m.unit == "player" then target = m; break end
+                    end
+                    if not target then
+                        for _, m in ipairs(needsRefresh) do
+                            if not IsSpellInRange or IsSpellInRange(spell, m.unit) ~= 0 then
+                                target = m; break
                             end
                         end
                     end
+                    if not target then target = needsRefresh[1] end
+                    table.insert(greaterQueue, { spell = spell, unit = target.unit })
                 end
             end
         end
 
         for _, member in ipairs(self.partyMembers) do
-            if member.isPet and not self:UnitHasPhaseShift(member.unit) then
-                local key = self.charDB.playerBlessings[member.name]
-                if key then
-                    local b = self:GetBlessingByKey(key)
-                    if b then
-                        if not self:UnitHasBlessing(member.unit, key) then
-                            table.insert(baseQueue, { spell = b.name, unit = member.unit })
-                        else
-                            local timeLeft = self:GetBlessingTimeLeft(member.unit, key)
-                            if timeLeft and timeLeft <= 120 then
-                                table.insert(baseQueue, { spell = b.name, unit = member.unit })
-                            end
-                        end
-                    end
-                end
+            local p = plan[member.name]
+            if p and not p.isGreater and (p.status == "missing" or p.status == "expiring") then
+                table.insert(baseQueue, { spell = p.spell, unit = member.unit })
             end
         end
 
@@ -534,15 +558,15 @@ function SP:GetAllMissingBuffs()
         table.insert(missing, { spell = self.charDB.selectedAura, unit = "player" })
     end
 
-    if self:ShouldUseRighteousFury() and not self:HasRighteousFury() then
-        table.insert(missing, { spell = "Righteous Fury", unit = "player" })
-    end
-
-    if self:ShouldUseRighteousFury() and self:HasRighteousFury() then
-        local rfTimeLeft = self:GetRFTimeLeft()
-        local rfThreshold = self.db.earlyGreaterWarning and 900 or 120
-        if rfTimeLeft and rfTimeLeft <= rfThreshold then
+    if self:ShouldUseRighteousFury() then
+        if not self:HasRighteousFury() then
             table.insert(missing, { spell = "Righteous Fury", unit = "player" })
+        else
+            local rfTimeLeft = self:GetRFTimeLeft()
+            local rfThreshold = self.db.earlyGreaterWarning and 900 or 120
+            if rfTimeLeft and rfTimeLeft <= rfThreshold then
+                table.insert(missing, { spell = "Righteous Fury", unit = "player" })
+            end
         end
     end
 
@@ -561,17 +585,9 @@ function SP:GetAllMissingBuffs()
             isOOR = true
         end
 
-        if not isOOR and entry.intendedUnit and entry.intendedUnit ~= entry.unit then
-            if UnitIsVisible and not UnitIsVisible(entry.intendedUnit) then
-                isOOR = true
-            elseif IsSpellInRange and IsSpellInRange(entry.spell, entry.intendedUnit) == 0 then
-                isOOR = true
-            end
-        end
-
         if isOOR then
             table.insert(outOfRange, entry)
-            local name = entry.intendedName or UnitName(entry.intendedUnit or entry.unit)
+            local name = UnitName(entry.unit)
             if name and not oorNameSet[name] then
                 oorNameSet[name] = true
                 table.insert(oorNames, name)
@@ -594,11 +610,9 @@ function SP:UpdateCastButton(allMissing)
     if #allMissing > 0 then
         self.nextBuffSpell = allMissing[1].spell
         self.nextBuffUnit = allMissing[1].unit
-        self.nextBuffIntendedName = allMissing[1].intendedName
     else
         self.nextBuffSpell = nil
         self.nextBuffUnit = nil
-        self.nextBuffIntendedName = nil
     end
 
     if self.castButton then
@@ -647,11 +661,7 @@ function SP:UpdateCastButton(allMissing)
         elseif self.hasActionableBuffs then
             GameTooltip:AddLine("Cast: " .. self.nextBuffSpell, 0, 1, 0)
             local castTarget = UnitName(self.nextBuffUnit or "") or self.nextBuffUnit or ""
-            if self.nextBuffIntendedName and self.nextBuffIntendedName ~= castTarget then
-                GameTooltip:AddLine("Target: " .. self.nextBuffIntendedName .. " (cast on: " .. castTarget .. ")", 0.8, 0.8, 0.8)
-            else
-                GameTooltip:AddLine("Target: " .. castTarget, 0.8, 0.8, 0.8)
-            end
+            GameTooltip:AddLine("Target: " .. castTarget, 0.8, 0.8, 0.8)
         elseif not self.nextBuffSpell then
             GameTooltip:AddLine("All buffs active!", 0, 1, 0)
         end
@@ -847,7 +857,6 @@ eventFrame:SetScript("OnEvent", function(self, event, arg1, arg2, arg3)
             C_Timer.After(1.0, function()
                 spellsBucket = nil
                 SP:ScanSpellbook()
-                SP:CleanupStaleAssignments()
                 SP:PPOnSpellsChanged()
                 SP:UpdateBuffStatus()
             end)

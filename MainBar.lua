@@ -32,6 +32,7 @@ function SP:CreateMainBar()
         self:StopMovingOrSizing()
         local point, _, relPoint, x, y = self:GetPoint()
         SP.db.mainBarPos = { point = point, relPoint = relPoint, x = x, y = y }
+        SP:RepositionPanels()
     end)
 
     if self.db and self.db.mainBarPos then
@@ -53,6 +54,7 @@ function SP:CreateMainBar()
         bar:StopMovingOrSizing()
         local point, _, relPoint, x, y = bar:GetPoint()
         SP.db.mainBarPos = { point = point, relPoint = relPoint, x = x, y = y }
+        SP:RepositionPanels()
     end)
     local indicatorTex = indicator:CreateTexture(nil, "ARTWORK")
     indicatorTex:SetAllPoints()
